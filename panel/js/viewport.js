@@ -470,7 +470,9 @@
       if (values.fill) o.mat.fill = values.fill;
       if (values.surfaces) Object.keys(values.surfaces).forEach(function (s) { o.mat.surfaces[s] = Object.assign({}, o.mat.surfaces[s], values.surfaces[s]); });
     }
-    if (part === 'geo' || part === 'mat') V.load(snapshot, V._fetch);
+    if (part === 'geo' || part === 'mat') {
+      if (!V._pendingLoad) V._pendingLoad = requestAnimationFrame(function () { V._pendingLoad = 0; V.load(snapshot, V._fetch); });
+    }
     request();
   };
   V.patchLights = function (lights) { if (snapshot) { snapshot.lights = lights; applyLights(lights); request(); } };

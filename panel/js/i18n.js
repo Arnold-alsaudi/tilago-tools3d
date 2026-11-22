@@ -2,8 +2,8 @@
 (function () {
   var D = {
     app: ['Tilago 3D Studio', 'Tilago 3D Studio'],
-    'tab.main': ['النص', 'Text'], 'tab.scene': ['المشهد', 'Scene'], 'tab.materials': ['الخامات', 'Materials'],
-    'tab.environment': ['البيئة', 'Environment'], 'tab.lighting': ['الإضاءة', 'Lighting'], 'tab.camera': ['الكاميرا', 'Camera'],
+    'tab.main': ['النص', 'Text'], 'tab.scene': ['المشهد والكاميرا', 'Scene and camera'], 'tab.materials': ['الخامات', 'Materials'],
+    'tab.environment': ['البيئة', 'Environment'], 'tab.lighting': ['الإضاءة والخلفية', 'Light and background'], 'tab.camera': ['الكاميرا', 'Camera'],
     'tab.animation': ['الحركة', 'Animation'], 'tab.presets': ['المكتبة', 'Presets'], 'tab.settings': ['الإعدادات', 'Settings'],
 
     'mode.native': ['المحرك الأصلي', 'Native 3D'], 'mode.e3d': ['Element 3D', 'Element 3D'],
@@ -23,11 +23,11 @@
     'font.align': ['المحاذاة', 'Alignment'], 'align.left': ['شمال', 'Left'], 'align.center': ['وسط', 'Center'], 'align.right': ['يمين', 'Right'],
     'font.rtl': ['من اليمين للشمال', 'Right to left', 'للعربي. بيتفعّل تلقائي لما تكتب عربي', 'For Arabic. Turns on automatically for Arabic text'],
     'font.fill': ['لون النص', 'Text color'],
-    'btn.create': ['إنشاء 3D', 'Create 3D', 'يعمل طبقة نص 3D حقيقية في الكومب الحالي', 'Creates a real 3D text layer in the active comp'],
+    'btn.create': ['نص 3D جديد', 'New 3D text', 'يعمل طبقة نص 3D حقيقية في الكومب الحالي', 'Creates a real 3D text layer in the active comp'],
     'btn.update': ['تحديث النص', 'Update text', 'يغيّر نص المجسم المتحدد من غير ما يعمله من الأول', 'Changes the selected object\'s text without rebuilding it'],
     'btn.convert': ['تحويل الطبقة المتحددة', 'Convert selected layer', 'حدد Text أو Shape layer في التايملاين وحوّلها 3D', 'Select a text or shape layer in the timeline and make it 3D'],
     'btn.e3dCreate': ['ربط بـ Element 3D', 'Link to Element 3D', 'يعمل طبقة Element 3D ويربط النص كـ Custom Text', 'Creates an Element 3D layer and links the text as Custom Text'],
-    'rtl.note': ['لو العربي طالع مقطع: من Edit > Preferences > Type اختار South Asian and Middle Eastern وافتح After Effects تاني.', 'If Arabic looks broken: Edit > Preferences > Type > South Asian and Middle Eastern, then restart After Effects.'],
+    'rtl.note': ['لو العربي طالع مقطّع: Preferences > Type > Middle Eastern وافتح الأفتر تاني.', 'If Arabic looks broken: Edit > Preferences > Type > South Asian and Middle Eastern, then restart After Effects.'],
     'geo.depth': ['عمق البثق', 'Extrusion depth', 'سُمك المجسم بالبكسل', 'Thickness of the object in pixels'],
     'geo.origin': ['اتجاه البثق', 'Extrusion direction', 'فين مستوى الطبقة جوه المجسم: قدام، نص، ورا', 'Where the layer plane sits in the body: front, middle, back'],
     'origin.front': ['لورا', 'Backward'], 'origin.center': ['من النص', 'Centered'], 'origin.back': ['لقدام', 'Forward'],
@@ -209,6 +209,8 @@
     'upd.restart': ['اتحدّثت لنسخة {v}. اقفل After Effects وافتحه تاني عشان التحديث يكمل', 'Updated to {v}. Restart After Effects to finish the update'],
     'upd.check': ['دوّر على تحديث', 'Check for updates'], 'upd.latest': ['معاك آخر نسخة ({v})', 'You have the latest version ({v})'],
     'upd.fail': ['مقدرتش أوصل للتحديثات: {e}', 'Could not check for updates: {e}'],
+    'ui.more': ['خيارات متقدمة', 'Advanced options'],
+    'text.editing': ['بتعدّل: {n}', 'Editing: {n}'], 'text.newHint': ['نص جديد', 'New text'],
     'btn.ok': ['تمام', 'OK'], 'btn.cancel': ['إلغاء', 'Cancel'], 'btn.yes': ['أيوه', 'Yes']
   };
 

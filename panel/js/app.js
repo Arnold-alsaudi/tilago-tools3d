@@ -163,6 +163,9 @@
     return Host.call('scene.snapshot', {}).then(function (snap) {
       if (!snap || !snap.comp) { $('#vpMsg').textContent = t('scene.nocomp'); return; }
       $('#vpMsg').textContent = snap.objects && snap.objects.length ? '' : t('scene.empty');
+      var key = JSON.stringify(snap);
+      if (key === S.snapKey) return;
+      S.snapKey = key;
       S.snapshot = snap;
       Viewport.load(snap, function (ref) { return Host.call('text.outlines', { ref: ref }); });
       Viewport.select(S.active);
@@ -196,9 +199,14 @@
   }
 
   /* ---------- tabs ---------- */
-  var TABS = [['main', 'text'], ['scene', 'scene'], ['materials', 'materials'], ['environment', 'environment'], ['lighting', 'lighting'],
-              ['camera', 'camera'], ['animation', 'animation'], ['presets', 'presets'], ['settings', 'settings']];
+  // Five tabs; library + settings live behind the gear in the header.
+  var TABS = [['main', 'text'], ['materials', 'materials'], ['scene', 'scene'], ['lighting', 'lighting'], ['animation', 'animation']];
   function buildTabs() {
+    var gear = $('#setBtn');
+    gear.innerHTML = icon('settings', 16);
+    gear.setAttribute('data-tip', t('tab.settings') + ' · ' + t('tab.presets'));
+    gear.classList.toggle('on', S.tab === 'settings');
+    gear.onclick = function () { S.tab = S.tab === 'settings' ? 'main' : 'settings'; buildTabs(); showPane(); };
     var nav = $('#tabs');
     nav.innerHTML = '';
     TABS.forEach(function (tb) {
@@ -211,10 +219,9 @@
   function showPane() {
     Array.prototype.forEach.call(document.querySelectorAll('.pane'), function (p) { p.classList.toggle('on', p.id === 'pane-' + S.tab); });
     $('#main').scrollTop = 0;
-    if (S.tab === 'lighting' && R.lights) R.lights.refresh();
-    if (S.tab === 'environment' && R.env) R.env.refresh();
-    if (S.tab === 'camera' && R.camera) R.camera.refresh();
-    if (S.tab === 'presets' && R.presets) R.presets.refresh();
+    if (S.tab === 'lighting') { if (R.lights) R.lights.refresh(); if (R.env) R.env.refresh(); }
+    if (S.tab === 'scene' && R.camera) R.camera.refresh();
+    if (S.tab === 'settings' && R.presets) R.presets.refresh();
   }
 
   /* ---------- object bar ---------- */
@@ -324,12 +331,15 @@
     var main = $('#main');
     main.innerHTML = '';
     R = { vp: R.vp };
-    [['main', buildMain], ['scene', buildScene], ['materials', buildMaterials], ['environment', buildEnv], ['lighting', buildLights],
-     ['camera', buildCamera], ['animation', buildAnim], ['presets', buildPresets], ['settings', buildSettings]].forEach(function (p) {
+    if (['main', 'materials', 'scene', 'lighting', 'animation', 'settings'].indexOf(S.tab) < 0) S.tab = 'main';
+    [['main', [buildMain]], ['materials', [buildMaterials]], ['scene', [buildScene, buildCamera]], ['lighting', [buildLights, buildEnv]],
+     ['animation', [buildAnim]], ['settings', [buildPresets, buildSettings]]].forEach(function (p) {
       var pane = el('div', 'pane' + (S.tab === p[0] ? ' on' : ''));
       pane.id = 'pane-' + p[0];
       main.appendChild(pane);
-      try { p[1](pane); } catch (e) { console.error(e); pane.appendChild(UI.note(String(e.message), 'err')); }
+      p[1].forEach(function (fn) {
+        try { fn(pane); } catch (e) { console.error(e); pane.appendChild(UI.note(String(e.message), 'err')); }
+      });
     });
     refreshActive();
   }
@@ -345,13 +355,24 @@
     ta.placeholder = t('text.ph');
     ta.value = S.draft.text;
     ta.dir = 'auto';
+    var typeT = 0;
     ta.addEventListener('input', function () {
       S.draft.text = ta.value;
+      // the active text object follows what you type
+      clearTimeout(typeT);
+      typeT = setTimeout(function () {
+        var it = activeItem();
+        if (it && it.role === 'text' && S.draft.text.trim()) {
+          Host.live('text', 'text.update', { ref: it.ref, text: S.draft.text, rtl: S.draft.rtl, recenter: true });
+          setTimeout(refreshSnapshot, 700);
+        }
+      }, 450);
       var ar = /[؀-ۿݐ-ݿﭐ-﷿ﹰ-﻿]/.test(ta.value);
       if (ar !== S.draft.rtl) { S.draft.rtl = ar; M.rtl.set(ar); rtlNote(); if (ar && S.draft.align === 'center') {} }
     });
     ta.addEventListener('keydown', function (ev) { if (ev.key === 'Enter' && ev.ctrlKey) { ev.preventDefault(); doUpdate(); } });
     var tl = el('label', 'lbl', t('text.input')); tl.setAttribute('data-tip', I18N.tip('text.input'));
+    M.editing = el('span', 'editing'); tl.appendChild(M.editing);
     b.appendChild(tl); b.appendChild(ta);
 
     // font family picker with search
@@ -415,7 +436,8 @@
     M.align = UI.seg({ key: 'font.align', value: S.draft.align, options: ['left', 'center', 'right'].map(function (a) { return { v: a, label: t('align.' + a) }; }), onChange: function (v) { S.draft.align = v; textLive(true); } });
     M.rtl = UI.toggle({ key: 'font.rtl', value: S.draft.rtl, onChange: function (v) { S.draft.rtl = v; rtlNote(); textLive(true); } });
     M.fill = UI.color({ key: 'font.fill', value: S.draft.fill, onInput: function (c) { S.draft.fill = c; var it = activeItem(); if (isObj(it)) { Viewport.patch(it.ref, 'mat', { fill: c }); live('fill', 'materials.set', { ref: it.ref, values: { fill: c } }); } } });
-    [M.size, M.tracking, M.leading, M.align, M.rtl, M.fill].forEach(function (x) { b.appendChild(x); });
+    [M.size, M.align, M.fill].forEach(function (x) { b.appendChild(x); });
+    b.appendChild(UI.more('text').add(M.tracking, M.leading, M.rtl));
     var rn = el('div'); b.appendChild(rn);
     function rtlNote() { rn.innerHTML = ''; if (S.draft.rtl && !(S.info && S.info.paragraphDirection)) rn.appendChild(UI.note(t('rtl.note'), 'warn')); }
     rtlNote();
@@ -423,7 +445,6 @@
     var bt = el('div', 'btns full');
     bt.appendChild(UI.button('btn.create', { primary: true, icon: 'cube', onClick: doCreate }));
     M.updBtn = UI.button('btn.update', { icon: 'refresh', onClick: doUpdate });
-    bt.appendChild(M.updBtn);
     b.appendChild(bt);
     var bt2 = el('div', 'btns full');
     bt2.appendChild(UI.button('btn.convert', { icon: 'target', small: true, onClick: doConvert }));
@@ -522,11 +543,13 @@
       c.onclick = function () { applyGeometry(p.values); };
       gpre.appendChild(c);
     });
-    [G.na, G.depth, G.origin, G.scale, G.bevel, G.bdepth, G.hole, G.faceBox, gpre].forEach(function (x) { gsec.body.appendChild(x); });
+    gpre.style.margin = '0 0 8px';
+    [gpre, G.na, G.depth, G.bevel, G.bdepth].forEach(function (x) { gsec.body.appendChild(x); });
+    gsec.body.appendChild(UI.more('geo').add(G.origin, G.scale, G.hole, G.faceBox));
 
     M.refresh = function () {
       var it = activeItem();
-      M.updBtn.disabled = !(it && it.role === 'text');
+      M.editing.textContent = it && it.role === 'text' ? '· ' + t('text.editing', { n: it.name }) : '';
       var ok = canGeo('depth');
       G.na.innerHTML = '';
       if (!ok) G.na.appendChild(UI.note(t('geo.na'), 'warn'));
@@ -733,11 +756,13 @@
     M.scale = UI.vec({ key: 'tf.scale', step: 0.1, link: true, onInput: function (v) { tset({ scale: v }); }, onChange: function (v) { tset({ scale: v }, true); } });
     M.anchor = UI.vec({ key: 'tf.anchor', step: 0.1, onInput: function (v) { tset({ anchor: v }); }, onChange: function (v) { tset({ anchor: v }, true); } });
     M.opacity = UI.slider({ key: 'tf.opacity', min: 0, max: 100, step: 1, unit: '%', hard: true, def: 100, onInput: function (v) { tset({ opacity: v }); }, onChange: function (v) { tset({ opacity: v }, true); } });
-    [M.pos, M.ori, M.rx, M.ry, M.rz, M.scale, M.anchor, M.opacity].forEach(function (x) { ts.body.appendChild(x); });
+    [M.pos, M.rx, M.ry, M.rz, M.scale].forEach(function (x) { ts.body.appendChild(x); });
+    var tfMore = UI.more('tf').add(M.ori, M.anchor, M.opacity);
+    ts.body.appendChild(tfMore);
     var tb = el('div', 'btns');
     tb.appendChild(UI.button('act.center', { small: true, icon: 'target', onClick: function () { var it = activeItem(); if (it) return run('scene.centerAnchor', { ref: it.ref }).then(function (r) { fillT(r); refreshSnapshot(); }); } }));
     tb.appendChild(UI.button('act.reset', { small: true, icon: 'reset', onClick: function () { var it = activeItem(); if (it) return run('scene.resetTransform', { ref: it.ref }).then(function (r) { fillT(r); refreshSnapshot(); }); } }));
-    ts.body.appendChild(tb);
+    tfMore.body.appendChild(tb);
     function fillT(tf) {
       if (!tf) return;
       M.pos.set(tf.position); M.ori.set(tf.orientation); M.rx.set(tf.rx); M.ry.set(tf.ry); M.rz.set(tf.rz);
@@ -760,6 +785,10 @@
     var M = R.materials = {};
     var e3dBox = el('div');
     pane.appendChild(e3dBox);
+    var pr = UI.section('matPresets', 'sec.matPresets');
+    pane.appendChild(pr);
+    M.grid = el('div', 'grid');
+    pr.body.appendChild(M.grid);
     var sec = UI.section('surface', 'sec.surface');
     pane.appendChild(sec);
     M.surf = UI.seg({ value: S.surface, options: ['all', 'Front', 'Bevel', 'Side', 'Back'].map(function (s) { return { v: s, label: t('surf.' + s) }; }), onChange: function (v) { S.surface = v; M.refresh(); } });
@@ -773,15 +802,17 @@
     M.opacity = UI.slider({ key: 'mat.opacity', min: 0, max: 100, step: 1, unit: '%', hard: true, def: 100, onInput: function (v) { mset('opacity', v); }, onChange: function (v) { mset('opacity', v, true); } });
     ps.body.appendChild(M.color); ps.body.appendChild(M.opacity);
     M.sl = {}; M.tg = {};
+    var matMore = UI.more('mat'), MAIN_MAT = ['metal', 'reflection', 'shininess', 'specular'];
     MAT_SLIDERS.forEach(function (d) {
       M.sl[d[0]] = UI.slider({ key: 'mat.' + d[0], min: d[1], max: d[2], step: d[3] || 1, unit: d[0] === 'ior' ? '' : '%', hard: true,
         onInput: function (v) { mset(d[0], v); }, onChange: function (v) { mset(d[0], v, true); } });
-      ps.body.appendChild(M.sl[d[0]]);
+      (MAIN_MAT.indexOf(d[0]) >= 0 ? ps.body : matMore.body).appendChild(M.sl[d[0]]);
     });
     MAT_TOGGLES.forEach(function (k) {
       M.tg[k] = UI.toggle({ key: 'mat.' + k, onChange: function (v) { mset(k, v ? 1 : 0, true); } });
-      ps.body.appendChild(M.tg[k]);
+      matMore.body.appendChild(M.tg[k]);
     });
+    ps.body.appendChild(matMore);
     M.hidden = el('div'); ps.body.appendChild(M.hidden);
     var pb = el('div', 'btns');
     M.resetBtn = UI.button('mat.reset', { small: true, icon: 'reset', onClick: function () {
@@ -792,10 +823,6 @@
     pb.appendChild(UI.button('mat.save', { small: true, icon: 'download', onClick: function () { return savePreset('material'); } }));
     ps.body.appendChild(pb);
 
-    var pr = UI.section('matPresets', 'sec.matPresets');
-    pane.appendChild(pr);
-    M.grid = el('div', 'grid');
-    pr.body.appendChild(M.grid);
 
     function mset(k, v, final) {
       var it = activeItem(); if (!isObj(it)) return;
@@ -918,7 +945,8 @@
     M.scale = UI.slider({ key: 'bg.scale', min: 10, max: 400, step: 1, unit: '%', floor: 1, def: 100, onInput: function (v) { bset({ scale: v }); }, onChange: function (v) { bset({ scale: v }, true); } });
     M.pos = UI.vec({ key: 'bg.position', axes: 2, step: 1, onInput: function (v) { bset({ position: v }); }, onChange: function (v) { bset({ position: v }, true); } });
     M.rot = UI.slider({ key: 'bg.rotation', min: -180, max: 180, step: 0.1, unit: '°', def: 0, onInput: function (v) { bset({ rotation: v }); }, onChange: function (v) { bset({ rotation: v }, true); } });
-    [M.type, M.color, M.g1, M.g2, M.angle, M.radial, M.file, M.opacity, M.blur, M.scale, M.pos, M.rot].forEach(function (x) { bs.body.appendChild(x); });
+    [M.type, M.color, M.g1, M.g2, M.angle, M.file, M.blur].forEach(function (x) { bs.body.appendChild(x); });
+    bs.body.appendChild(UI.more('bg').add(M.radial, M.opacity, M.scale, M.pos, M.rot));
     bs.body.appendChild(UI.note(t('bg.note')));
     function vis() {
       var ty = cur.type, tr = ty === 'transparent', file = ty === 'image' || ty === 'video';
@@ -947,7 +975,7 @@
     }
 
     // environment
-    var es = UI.section('env', 'sec.env');
+    var es = UI.section('env', 'sec.env', { closed: true });
     pane.appendChild(es);
     var eb = es.body;
     var ebtn = el('div', 'btns');
@@ -1075,7 +1103,8 @@
     M.poi = UI.vec({ key: 'light.poi', step: 1, onInput: function (v) { lset({ poi: v }); }, onChange: function (v) { lset({ poi: v }, true); } });
     M.ori = UI.vec({ key: 'tf.orientation', step: 0.1, onInput: function (v) { lset({ orientation: v }); }, onChange: function (v) { lset({ orientation: v }, true); } });
     M.type.label.textContent = t('bg.type');
-    [M.type, M.on, M.color, M.int, M.cone, M.feather, M.falloff, M.radius, M.fdist, M.shadows, M.sdark, M.sdiff, M.aim, M.pos, M.poi, M.ori].forEach(function (x) { props.body.appendChild(x); });
+    [M.type, M.on, M.color, M.int, M.cone, M.shadows].forEach(function (x) { props.body.appendChild(x); });
+    props.body.appendChild(UI.more('light').add(M.feather, M.falloff, M.radius, M.fdist, M.sdark, M.sdiff, M.aim, M.pos, M.poi, M.ori));
     var del = el('div', 'btns');
     del.appendChild(UI.button('act.delete', { small: true, danger: true, icon: 'trash', onClick: function () {
       if (!S.light) return;
@@ -1140,10 +1169,10 @@
   function buildCamera(pane) {
     var M = R.camera = {};
     var box = el('div'); pane.appendChild(box);
-    var cs = UI.section('camera', 'sec.camera'); pane.appendChild(cs);
-    var ls = UI.section('lens', 'sec.lens'); pane.appendChild(ls);
-    var ds = UI.section('dof', 'sec.dof'); pane.appendChild(ds);
     var fs = UI.section('framing', 'sec.framing'); pane.appendChild(fs);
+    var ls = UI.section('lens', 'sec.lens'); pane.appendChild(ls);
+    var cs = UI.section('camera', 'sec.camera', { closed: true }); pane.appendChild(cs);
+    var ds = UI.section('dof', 'sec.dof', { closed: true }); pane.appendChild(ds);
     function cset(values, final) {
       markDrag();
       live('cam', 'camera.set', { values: values }, final);
@@ -1236,6 +1265,7 @@
   var CUSTOM_PROPS = ['position', 'rx', 'ry', 'rz', 'scale', 'opacity', 'depth', 'bevel', 'metal', 'reflection', 'FrontColor', 'SideColor', 'BevelColor'];
   function buildAnim(pane) {
     var M = R.anim = {}, A = S.anim;
+    var ps = UI.section('animPresets', 'sec.animPresets'); pane.appendChild(ps);
     var ts = UI.section('animTiming', 'sec.animTiming'); pane.appendChild(ts);
     M.target = UI.seg({ key: 'anim.targets', value: A.target, options: [{ v: 'active', label: t('anim.active') }, { v: 'selected', label: t('anim.selected') }], onChange: function (v) { A.target = v; } });
     var startRow = el('div', 'slider');
@@ -1251,9 +1281,9 @@
     M.stagger = UI.slider({ key: 'anim.stagger', min: 0, max: 1, step: 0.01, unit: 's', hard: true, value: A.stagger, def: 0.08, onChange: function (v) { A.stagger = v; } });
     M.replace = UI.toggle({ key: 'anim.replace', value: A.replace, onChange: function (v) { A.replace = v; } });
     M.color = UI.color({ key: 'anim.colorFrom', value: A.color, onChange: function (c) { A.color = c; } });
-    [M.target, M.start, M.dur, M.ease, M.speed, M.amount, M.stagger, M.replace, M.color].forEach(function (x) { ts.body.appendChild(x); });
+    [M.dur, M.ease].forEach(function (x) { ts.body.appendChild(x); });
+    ts.body.appendChild(UI.more('anim').add(M.target, M.start, M.speed, M.amount, M.stagger, M.replace, M.color));
 
-    var ps = UI.section('animPresets', 'sec.animPresets'); pane.appendChild(ps);
     var grid = el('div', 'grid');
     var apIcon = { reveal3d: 'cube', entrance: 'move', popUp: 'plus', scaleReveal: 'frame', spin3d: 'refresh', smoothRotation: 'reset', floating: 'environment', cinematic: 'camera', extrudeGrow: 'scene', bevelGrow: 'target', colorShift: 'materials' };
     Presets.animation.forEach(function (id) {
@@ -1279,7 +1309,7 @@
     M.readTiming = readTiming;
 
     // custom
-    var cs = UI.section('animCustom', 'sec.animCustom'); pane.appendChild(cs);
+    var cs = UI.section('animCustom', 'sec.animCustom', { closed: true }); pane.appendChild(cs);
     var fromIn = el('input', 'txt'), toIn = el('input', 'txt');
     fromIn.dir = toIn.dir = 'ltr';
     M.prop = UI.select({ key: 'anim.prop', options: CUSTOM_PROPS.map(function (p) { return { v: p, label: t('prop.' + p) }; }), value: 'ry', onChange: function () { fromIn.value = ''; toIn.value = ''; fillCur(toIn); } });

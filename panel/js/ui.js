@@ -102,6 +102,24 @@
     return root;
   }
 
+  // Inline "Advanced options" fold: keeps every tab short, remembers its state.
+  function more(id) {
+    var open = false;
+    try { open = localStorage.getItem('ts3d.more.' + id) === '1'; } catch (e) {}
+    var wrap = el('div', 'more' + (open ? ' open' : ''));
+    var b = el('button', 'more-h', '<span>' + t('ui.more') + '</span>' + icon('chevron', 12));
+    b.type = 'button';
+    var body = el('div', 'more-b');
+    b.addEventListener('click', function () {
+      open = !open; wrap.classList.toggle('open', open);
+      try { localStorage.setItem('ts3d.more.' + id, open ? '1' : '0'); } catch (e) {}
+    });
+    wrap.appendChild(b); wrap.appendChild(body);
+    wrap.body = body;
+    wrap.add = function () { for (var i = 0; i < arguments.length; i++) body.appendChild(arguments[i]); return wrap; };
+    return wrap;
+  }
+
   function row(labelKey, control, opts) {
     var r = el('div', 'row' + (opts && opts.wide ? ' wide' : ''));
     var l = el('label', 'lbl', t(labelKey));
@@ -442,7 +460,7 @@
   }
 
   window.UI = {
-    icon: icon, el: el, section: section, row: row, slider: slider, vec: vec, color: color, select: select, seg: seg, toggle: toggle,
+    icon: icon, el: el, section: section, more: more, row: row, slider: slider, vec: vec, color: color, select: select, seg: seg, toggle: toggle,
     button: button, iconBtn: iconBtn, note: note, toast: toast, confirm: function (text, danger) { return dialog({ text: text, danger: danger, okKey: danger ? 'btn.yes' : 'btn.ok' }); },
     prompt: function (text, value) { return dialog({ text: text, input: value || '' }); }, toHex: toHex, fromHex: fromHex, fmt: fmt
   };

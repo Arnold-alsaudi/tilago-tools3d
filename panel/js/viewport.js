@@ -26,7 +26,7 @@
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     el.appendChild(renderer.domElement);
     scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x15131b);
+    scene.background = new THREE.Color(0x0b0614);
 
     persp = new THREE.PerspectiveCamera(39.6, 1, 5, 200000);
     ortho = new THREE.OrthographicCamera(-1, 1, 1, -1, -100000, 100000);
@@ -36,7 +36,7 @@
     root = new THREE.Group(); scene.add(root);
     lightsGroup = new THREE.Group(); scene.add(lightsGroup);
 
-    grid = new THREE.GridHelper(4000, 40, 0x3a3450, 0x24212f);
+    grid = new THREE.GridHelper(4000, 40, 0x4a2a80, 0x1e1233);
     grid.position.y = -compInfo.h / 2;
     grid.material.transparent = true; grid.material.opacity = 0.55;
     scene.add(grid);
@@ -385,7 +385,7 @@
   }
 
   function applyBg(bg) {
-    if (!bg || !bg.enabled || bg.type === 'transparent') { scene.background = new THREE.Color(0x15131b); return; }
+    if (!bg || !bg.enabled || bg.type === 'transparent') { scene.background = new THREE.Color(0x0b0614); return; }
     var c = bg.type === 'gradient' ? (bg.g1 || bg.color) : bg.color;
     if (c) scene.background = new THREE.Color(c[0], c[1], c[2]).convertSRGBToLinear();
   }

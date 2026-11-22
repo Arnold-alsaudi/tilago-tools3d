@@ -63,7 +63,6 @@
   function boot() {
     document.documentElement.lang = I18N.lang;
     document.documentElement.dir = I18N.lang === 'ar' ? 'rtl' : 'ltr';
-    $('#brandMark').innerHTML = icon('cube', 13);
     $('#langBtn').textContent = I18N.lang === 'ar' ? 'EN' : 'ع';
     $('#langBtn').onclick = function () { I18N.set(I18N.lang === 'ar' ? 'en' : 'ar'); rebuild(); };
     buildTabs();
@@ -330,6 +329,7 @@
   function buildPanes() {
     var main = $('#main');
     main.innerHTML = '';
+    Array.prototype.forEach.call(document.querySelectorAll('body > .font-list'), function (n) { n.remove(); });
     R = { vp: R.vp };
     if (['main', 'materials', 'scene', 'lighting', 'animation', 'settings'].indexOf(S.tab) < 0) S.tab = 'main';
     [['main', [buildMain]], ['materials', [buildMaterials]], ['scene', [buildScene, buildCamera]], ['lighting', [buildLights, buildEnv]],
@@ -379,7 +379,16 @@
     var fp = el('div', 'font-pick');
     var fin = el('input', 'txt'); fin.placeholder = t('font.loading'); fin.spellcheck = false;
     var flist = el('div', 'font-list');
-    fp.appendChild(fin); fp.appendChild(flist);
+    fp.appendChild(fin);
+    // the list lives on <body> so the cut-corner sections never clip it
+    document.body.appendChild(flist);
+    function placeList() {
+      var r = fin.getBoundingClientRect();
+      flist.style.left = r.left + 'px'; flist.style.width = r.width + 'px';
+      var below = window.innerHeight - r.bottom;
+      if (below < 200 && r.top > below) { flist.style.top = ''; flist.style.bottom = (window.innerHeight - r.top + 3) + 'px'; }
+      else { flist.style.bottom = ''; flist.style.top = (r.bottom + 3) + 'px'; }
+    }
     var hl = -1;
     function renderFonts(q) {
       flist.innerHTML = '';
@@ -404,9 +413,9 @@
       fillStyles(true);
       textLive();
     }
-    fin.addEventListener('focus', function () { renderFonts(''); flist.classList.add('on'); fin.select(); });
+    fin.addEventListener('focus', function () { renderFonts(''); placeList(); flist.classList.add('on'); fin.select(); });
     fin.addEventListener('blur', function () { setTimeout(function () { flist.classList.remove('on'); fin.value = S.draft.family || ''; }, 120); });
-    fin.addEventListener('input', function () { renderFonts(fin.value); flist.classList.add('on'); });
+    fin.addEventListener('input', function () { renderFonts(fin.value); placeList(); flist.classList.add('on'); });
     fin.addEventListener('keydown', function (ev) {
       var opts = flist.children;
       if (ev.key === 'ArrowDown' || ev.key === 'ArrowUp') {

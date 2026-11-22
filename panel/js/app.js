@@ -1,0 +1,1584 @@
+/* Tilago 3D Studio - panel controller. */
+(function () {
+  var $ = function (s, r) { return (r || document).querySelector(s); };
+  var el = UI.el, icon = UI.icon;
+
+  var S = {
+    info: null, caps: null, comp: null, items: [], active: null, sel: [], fonts: null,
+    mode: 'native', tab: 'main', snapshot: null, listHash: '', busy: 0,
+    settings: Object.assign({ live: true, sync: true, quality: 'mid', vpH: 240, vpOpen: true, shading: 'material', mode: 'native' }, Store.read('settings.json', {})),
+    draft: { text: 'Tilago', family: null, ps: null, size: 200, tracking: 0, leading: 0, align: 'center', rtl: false, fill: [0.33, 0.09, 0.71] },
+    surface: 'all', light: null, anim: { target: 'active', start: null, duration: 1.5, ease: 'ease', speed: 1, amount: 1, stagger: 0.08, replace: true, color: [1, 1, 1] },
+    presetCat: 'material'
+  };
+  S.mode = S.settings.mode || 'native';
+  var R = {}; // UI references per pane
+
+  function saveSettings() { S.settings.mode = S.mode; try { Store.write('settings.json', S.settings); } catch (e) {} }
+
+  /* ---------- status / errors ---------- */
+  function status(msg) { $('#status .msg').textContent = msg || t('st.ready'); }
+  function busy(on) { S.busy += on ? 1 : -1; $('#status').classList.toggle('busy', S.busy > 0); }
+  function errText(e) {
+    var code = e && e.code;
+    if (code === 'EVAL' && e.message && /^ERR:|line|missing/.test(e.message)) return t('err.EVAL') + ' — ' + e.message.replace(/^ERR:/, '');
+    if (code && I18N.has('err.' + code)) return t('err.' + code);
+    return t('err.HOST', { e: (e && e.message) || String(e) });
+  }
+  var App = window.App = {
+    error: function (e) { console.error(e); UI.toast(errText(e), 'err'); status(errText(e)); }
+  };
+  function run(name, args, okMsg) {
+    busy(true);
+    return Host.call(name, args).then(function (r) { if (okMsg) { UI.toast(okMsg); status(okMsg); } return r; })
+      .catch(function (e) { App.error(e); throw e; })
+      .then(function (r) { busy(false); return r; }, function (e) { busy(false); throw e; });
+  }
+  function quiet(name, args) { return Host.call(name, args).catch(function (e) { App.error(e); return null; }); }
+  // While dragging, values stream to AE only when "live update" is on; the final value is always sent.
+  function live(channel, name, args, final) {
+    if (final || S.settings.live) Host.live(channel, name, args);
+  }
+
+  /* ---------- capabilities ---------- */
+  function capsR() {
+    if (!S.caps || !S.comp) return null;
+    return S.caps.renderers[S.comp.renderer] || null;
+  }
+  function canGeo(k) { var r = capsR(); return !!(r && r.geo && r.geo[k]); }
+  function canMat(k) { var r = capsR(); return !!(r && r.mat && r.mat[k]); }
+  function canSurf(s, k) { var r = capsR(); return !!(r && r.surf && r.surf[s] && r.surf[s][k]); }
+  function bestRenderer() { return S.caps ? S.caps.best : null; }
+
+  function activeItem() { for (var i = 0; i < S.items.length; i++) if (S.items[i].ref === S.active) return S.items[i]; return null; }
+  function isObj(it) { return it && (it.role === 'text' || it.role === 'shape') && it.is3D; }
+  function needObj() { var it = activeItem(); if (!isObj(it)) { UI.toast(t('err.NO_OBJECT'), 'warn'); return null; } return it; }
+  function selRefs() {
+    var objs = S.sel.filter(function (r) { var it = S.items.filter(function (x) { return x.ref === r; })[0]; return isObj(it); });
+    if (!objs.length && S.active) objs = [S.active];
+    return objs;
+  }
+
+  /* ---------- boot ---------- */
+  function boot() {
+    document.documentElement.lang = I18N.lang;
+    document.documentElement.dir = I18N.lang === 'ar' ? 'rtl' : 'ltr';
+    $('#brandMark').innerHTML = icon('cube', 13);
+    $('#langBtn').textContent = I18N.lang === 'ar' ? 'EN' : 'ع';
+    $('#langBtn').onclick = function () { I18N.set(I18N.lang === 'ar' ? 'en' : 'ar'); rebuild(); };
+    buildTabs();
+    buildViewport();
+    buildPanes();
+    status(Host.connected ? t('st.ready') : t('st.noHost'));
+    narrow();
+    try {
+      var up = JSON.parse(sessionStorage.getItem('ts3d.updated') || 'null');
+      if (up) { sessionStorage.removeItem('ts3d.updated'); UI.toast(t(up.restart ? 'upd.restart' : 'upd.done', { v: up.v }), up.restart ? 'warn' : 'ok'); }
+    } catch (e) {}
+    window.addEventListener('resize', narrow);
+  }
+  function rebuild() {
+    document.documentElement.lang = I18N.lang;
+    document.documentElement.dir = I18N.lang === 'ar' ? 'rtl' : 'ltr';
+    $('#langBtn').textContent = I18N.lang === 'ar' ? 'EN' : 'ع';
+    buildTabs(); buildVpBar(); buildPanes(); updateChips(); renderObjbar(); refreshActive();
+    status(Host.connected ? t('st.ready') : t('st.noHost'));
+    $('#vpToggle').setAttribute('data-tip', t(S.settings.vpOpen ? 'vp.collapse' : 'vp.expand'));
+    if (S.snapshot) $('#vpMsg').textContent = S.snapshot.objects && S.snapshot.objects.length ? '' : t('scene.empty');
+  }
+  function narrow() { document.body.classList.toggle('narrow', window.innerWidth < 400); }
+
+  function start() {
+    boot();
+    busy(true);
+    status(t('caps.probing'));
+    Host.call('caps.info', {}).then(function (info) {
+      S.info = info; S.comp = info.comp;
+      var cached = Store.read('cache/caps.json', null);
+      if (cached && cached.version === info.version && cached.renderers) return cached;
+      return Host.call('caps.probe', {}).then(function (p) { Store.write('cache/caps.json', p); return p; });
+    }).then(function (caps) {
+      S.caps = caps;
+      if (S.mode === 'e3d' && !(S.info && S.info.e3d)) S.mode = 'native';
+      busy(false);
+      status(Host.connected ? t('st.ready') : t('st.noHost'));
+      buildPanes(); updateChips();
+      if (!S.fonts) loadFonts();
+      poll(true);
+      setInterval(function () { poll(false); }, 1500);
+    }).catch(function (e) { busy(false); App.error(e); buildPanes(); if (!S.fonts) loadFonts(); });
+  }
+
+  function loadFonts() {
+    Fonts.load().then(function (f) {
+      S.fonts = f;
+      if (!S.draft.family) {
+        var pref = ['Segoe UI', 'Arial', 'Tahoma'];
+        for (var i = 0; i < pref.length; i++) if (f.families[pref[i]]) { S.draft.family = pref[i]; break; }
+        if (!S.draft.family) S.draft.family = f.names[0];
+        var st = f.families[S.draft.family];
+        S.draft.ps = st ? (st.filter(function (s) { return /bold/i.test(s.style); })[0] || st[0]).ps : null;
+      }
+      if (R.main) R.main.fontsReady();
+    }).catch(App.error);
+  }
+
+  /* ---------- polling ---------- */
+  var pollN = 0, polling = false;
+  function poll(force) {
+    if (polling || document.hidden) return;
+    polling = true;
+    Host.call('scene.list', {}).then(function (r) {
+      polling = false;
+      if (!r) return;
+      var compChanged = JSON.stringify(r.comp) !== JSON.stringify(S.comp);
+      S.comp = r.comp;
+      S.items = r.items || [];
+      var h = JSON.stringify(S.items.map(function (i) { return [i.ref, i.name, i.enabled, i.locked, i.parent, i.role]; }));
+      var listChanged = h !== S.listHash;
+      S.listHash = h;
+      if (S.settings.sync) {
+        var sel = S.items.filter(function (i) { return i.selected; });
+        if (sel.length === 1 && sel[0].ref !== S.active && (isObj(sel[0]) || sel[0].role === 'light' || sel[0].role === 'e3d' || sel[0].role === 'e3dtpl')) {
+          if (sel[0].role === 'light') { S.light = sel[0].ref; if (R.lights) R.lights.refresh(); }
+          else setActive(sel[0].ref, true);
+        }
+      }
+      if (S.active && !activeItem()) setActive(null, true);
+      if (!S.active) {
+        var first = S.items.filter(isObj)[0];
+        if (first) setActive(first.ref, true);
+      }
+      if (compChanged) { updateChips(); if (R.settings) R.settings.refresh(); }
+      if (listChanged || compChanged || force) { renderObjbar(); if (R.scene) R.scene.renderList(); refreshSnapshot(); if (compChanged) refreshActive(); }
+      else if (++pollN % 2 === 0 && !dragging()) refreshSnapshot();
+    }).catch(function () { polling = false; });
+  }
+  var dragT = 0;
+  function markDrag() { dragT = Date.now(); }
+  function dragging() { return Date.now() - dragT < 1500; }
+
+  function refreshSnapshot() {
+    if (!Viewport.ready) return Promise.resolve();
+    return Host.call('scene.snapshot', {}).then(function (snap) {
+      if (!snap || !snap.comp) { $('#vpMsg').textContent = t('scene.nocomp'); return; }
+      $('#vpMsg').textContent = snap.objects && snap.objects.length ? '' : t('scene.empty');
+      S.snapshot = snap;
+      Viewport.load(snap, function (ref) { return Host.call('text.outlines', { ref: ref }); });
+      Viewport.select(S.active);
+    }).catch(function () {});
+  }
+
+  function updateChips() {
+    var m = $('#chipMode'), r = $('#chipRenderer');
+    m.className = 'chip ' + (S.mode === 'e3d' ? 'warn' : 'ok');
+    m.lastChild.textContent = t(S.mode === 'e3d' ? 'mode.e3d' : 'mode.native');
+    var rn = S.comp ? S.comp.rendererName : '—';
+    r.className = 'chip ' + (S.comp && canGeo('depth') ? 'ok' : 'warn');
+    r.lastChild.textContent = rn;
+    r.setAttribute('data-tip', S.comp ? S.comp.name + ' · ' + S.comp.w + '×' + S.comp.h : t('scene.nocomp'));
+    $('#stComp').textContent = S.comp ? S.comp.name : '';
+  }
+
+  function setActive(ref, fromPoll) {
+    if (ref === S.active) return;
+    S.active = ref;
+    if (S.sel.indexOf(ref) < 0) S.sel = ref ? [ref] : [];
+    renderObjbar();
+    if (R.scene) R.scene.renderList();
+    Viewport.select(ref);
+    refreshActive();
+    if (ref && !fromPoll && S.settings.sync) quiet('scene.select', { ref: ref });
+  }
+
+  function refreshActive() {
+    ['main', 'scene', 'materials', 'camera', 'anim', 'e3d'].forEach(function (k) { if (R[k] && R[k].refresh) R[k].refresh(); });
+  }
+
+  /* ---------- tabs ---------- */
+  var TABS = [['main', 'text'], ['scene', 'scene'], ['materials', 'materials'], ['environment', 'environment'], ['lighting', 'lighting'],
+              ['camera', 'camera'], ['animation', 'animation'], ['presets', 'presets'], ['settings', 'settings']];
+  function buildTabs() {
+    var nav = $('#tabs');
+    nav.innerHTML = '';
+    TABS.forEach(function (tb) {
+      var b = el('button', 'tab' + (S.tab === tb[0] ? ' on' : ''), icon(tb[1], 17) + '<span>' + t('tab.' + tb[0]) + '</span>');
+      b.type = 'button'; b.setAttribute('role', 'tab'); b.setAttribute('data-tip', t('tab.' + tb[0]));
+      b.onclick = function () { S.tab = tb[0]; buildTabs(); showPane(); };
+      nav.appendChild(b);
+    });
+  }
+  function showPane() {
+    Array.prototype.forEach.call(document.querySelectorAll('.pane'), function (p) { p.classList.toggle('on', p.id === 'pane-' + S.tab); });
+    $('#main').scrollTop = 0;
+    if (S.tab === 'lighting' && R.lights) R.lights.refresh();
+    if (S.tab === 'environment' && R.env) R.env.refresh();
+    if (S.tab === 'camera' && R.camera) R.camera.refresh();
+    if (S.tab === 'presets' && R.presets) R.presets.refresh();
+  }
+
+  /* ---------- object bar ---------- */
+  function renderObjbar() {
+    var bar = $('#objbar');
+    bar.innerHTML = '';
+    bar.appendChild(el('span', 'lbl2', t('obj.pick')));
+    var objs = S.items.filter(function (i) { return isObj(i) || i.role === 'e3d' || i.role === 'e3dtpl'; });
+    var s = UI.select({
+      options: objs.length ? objs.map(function (o) { return { v: o.ref, label: o.name + '  ·  ' + t('role.' + o.role) }; }) : [{ v: '', label: S.comp ? t('obj.none') : t('scene.nocomp') }],
+      value: S.active || '', onChange: function (v) { setActive(v || null); }
+    });
+    bar.appendChild(s.sel);
+    bar.appendChild(UI.iconBtn('refresh', t('obj.refresh'), function () { S.listHash = ''; poll(true); }));
+  }
+
+  /* ---------- viewport ---------- */
+  function buildViewport() {
+    var wrap = $('#vpWrap');
+    wrap.style.setProperty('--vp-h', S.settings.vpH + 'px');
+    wrap.classList.toggle('collapsed', !S.settings.vpOpen);
+    $('#vpToggle').innerHTML = icon('chevron', 12);
+    $('#vpToggle').onclick = function () {
+      S.settings.vpOpen = !S.settings.vpOpen; wrap.classList.toggle('collapsed', !S.settings.vpOpen); saveSettings();
+      $('#vpToggle').setAttribute('data-tip', t(S.settings.vpOpen ? 'vp.collapse' : 'vp.expand'));
+      setTimeout(Viewport.resize, 0);
+    };
+    $('#vpToggle').setAttribute('data-tip', t(S.settings.vpOpen ? 'vp.collapse' : 'vp.expand'));
+    var rz = $('#vpResize'), sy = 0, sh = 0;
+    rz.addEventListener('pointerdown', function (ev) { sy = ev.clientY; sh = wrap.offsetHeight; rz.setPointerCapture(ev.pointerId); });
+    rz.addEventListener('pointermove', function (ev) {
+      if (!rz.hasPointerCapture(ev.pointerId)) return;
+      S.settings.vpH = Math.max(120, Math.min(window.innerHeight - 160, sh + ev.clientY - sy));
+      wrap.style.setProperty('--vp-h', S.settings.vpH + 'px');
+    });
+    rz.addEventListener('pointerup', function () { saveSettings(); });
+
+    var ok = !!(window.THREE && THREE.OrbitControls) && Viewport.init($('#vp'), {
+      onSelect: function (ref) { if (ref) setActive(ref); },
+      onMove: function (ref, pos, final) {
+        markDrag();
+        Host.live('move', 'scene.setTransform', { ref: ref, values: { position: pos } });
+        if (final && R.scene) R.scene.refresh();
+      },
+      onViewChange: function (v, end) {
+        if (R.vp) R.vp.view.set(v);
+        if (end && R.vp && R.vp.camSync && S.snapshot && S.snapshot.camera) applyViewToCamera(true);
+      }
+    });
+    if (!ok) { $('#vpMsg').textContent = t('vp.nogl'); return; }
+    Viewport.setQuality(S.settings.quality);
+    Viewport.setShading(S.settings.shading);
+    Viewport.setView('persp');
+    buildVpBar();
+  }
+
+  function buildVpBar() {
+    var bar = $('#vpBar');
+    bar.innerHTML = '';
+    if (!Viewport.ready) return;
+    R.vp = {};
+    var views = ['persp', 'camera', 'front', 'back', 'left', 'right', 'top', 'bottom'];
+    R.vp.view = UI.select({ options: views.map(function (v) { return { v: v, label: t('vp.' + v) }; }), value: Viewport.currentView(), onChange: function (v) { Viewport.setView(v); } });
+    bar.appendChild(R.vp.view.sel);
+    var shades = ['wire', 'shaded', 'material', 'hq'];
+    var sh = UI.select({ options: shades.map(function (v) { return { v: v, label: t('vp.' + v) }; }), value: S.settings.shading,
+      onChange: function (v) { S.settings.shading = v; saveSettings(); Viewport.setShading(v); if (v === 'hq') Viewport.setQuality('high'); else Viewport.setQuality(S.settings.quality); } });
+    bar.appendChild(sh.sel);
+    bar.appendChild(el('span', 'sp'));
+    var mv = UI.iconBtn('move', t('vp.move'), function () { mv.classList.toggle('on'); Viewport.setMoveMode(mv.classList.contains('on')); });
+    bar.appendChild(mv);
+    bar.appendChild(UI.iconBtn('frame', t('vp.fit'), function () { Viewport.fit(); }));
+    bar.appendChild(UI.iconBtn('camera', t('vp.toCam'), function () { applyViewToCamera(false); }));
+    bar.appendChild(UI.iconBtn('image', t('vp.frame'), grabFrame));
+    $('#vpBadge').textContent = t('vp.approx');
+  }
+
+  function applyViewToCamera(silent) {
+    var v = Viewport.viewAsAECamera();
+    var p = (S.snapshot && S.snapshot.camera) ? Promise.resolve() : Host.call('camera.ensure', {});
+    return p.then(function () { return Host.call('camera.set', { values: v }); }).then(function (c) {
+      if (!silent) UI.toast(t('ok.updated'));
+      if (S.snapshot) S.snapshot.camera = c;
+      if (R.camera) R.camera.refresh();
+    }).catch(App.error);
+  }
+
+  function grabFrame() {
+    var f = $('#vpFrame');
+    if (f.classList.contains('on')) { f.classList.remove('on'); return; }
+    var p = Store.tmpFile('frame_' + Date.now() + '.png');
+    run('scene.saveFrame', { path: p }).then(function () {
+      var tries = 0;
+      (function wait() {
+        if (Store.exists(p)) {
+          f.style.backgroundImage = 'url("file:///' + p.replace(/\\/g, '/') + '")';
+          f.classList.add('on');
+          f.onclick = function () { f.classList.remove('on'); };
+        } else if (tries++ < 40) setTimeout(wait, 250);
+        else App.error({ code: 'FRAME_WRITE' });
+      })();
+    }).catch(function () {});
+  }
+
+  /* ---------- panes ---------- */
+  function buildPanes() {
+    var main = $('#main');
+    main.innerHTML = '';
+    R = { vp: R.vp };
+    [['main', buildMain], ['scene', buildScene], ['materials', buildMaterials], ['environment', buildEnv], ['lighting', buildLights],
+     ['camera', buildCamera], ['animation', buildAnim], ['presets', buildPresets], ['settings', buildSettings]].forEach(function (p) {
+      var pane = el('div', 'pane' + (S.tab === p[0] ? ' on' : ''));
+      pane.id = 'pane-' + p[0];
+      main.appendChild(pane);
+      try { p[1](pane); } catch (e) { console.error(e); pane.appendChild(UI.note(String(e.message), 'err')); }
+    });
+    refreshActive();
+  }
+
+  /* ====================== MAIN (text + geometry) ====================== */
+  function buildMain(pane) {
+    var M = R.main = {};
+    var sec = UI.section('text', 'sec.text');
+    pane.appendChild(sec);
+    var b = sec.body;
+
+    var ta = el('textarea', 'txt');
+    ta.placeholder = t('text.ph');
+    ta.value = S.draft.text;
+    ta.dir = 'auto';
+    ta.addEventListener('input', function () {
+      S.draft.text = ta.value;
+      var ar = /[؀-ۿݐ-ݿﭐ-﷿ﹰ-﻿]/.test(ta.value);
+      if (ar !== S.draft.rtl) { S.draft.rtl = ar; M.rtl.set(ar); rtlNote(); if (ar && S.draft.align === 'center') {} }
+    });
+    ta.addEventListener('keydown', function (ev) { if (ev.key === 'Enter' && ev.ctrlKey) { ev.preventDefault(); doUpdate(); } });
+    var tl = el('label', 'lbl', t('text.input')); tl.setAttribute('data-tip', I18N.tip('text.input'));
+    b.appendChild(tl); b.appendChild(ta);
+
+    // font family picker with search
+    var fp = el('div', 'font-pick');
+    var fin = el('input', 'txt'); fin.placeholder = t('font.loading'); fin.spellcheck = false;
+    var flist = el('div', 'font-list');
+    fp.appendChild(fin); fp.appendChild(flist);
+    var hl = -1;
+    function renderFonts(q) {
+      flist.innerHTML = '';
+      if (!S.fonts) return;
+      q = (q || '').toLowerCase();
+      var names = S.fonts.names.filter(function (n) { return !q || n.toLowerCase().indexOf(q) >= 0; }).slice(0, 250);
+      names.forEach(function (n, i) {
+        var o = el('div', 'font-opt');
+        o.textContent = n;
+        o.style.fontFamily = '"' + n + '", ' + 'var(--font)';
+        var sm = el('small', '', S.fonts.families[n].length + '');
+        o.appendChild(sm);
+        o.onmousedown = function (ev) { ev.preventDefault(); pickFamily(n); };
+        flist.appendChild(o);
+      });
+      hl = -1;
+    }
+    function pickFamily(n) {
+      S.draft.family = n;
+      fin.value = n;
+      flist.classList.remove('on');
+      fillStyles(true);
+      textLive();
+    }
+    fin.addEventListener('focus', function () { renderFonts(''); flist.classList.add('on'); fin.select(); });
+    fin.addEventListener('blur', function () { setTimeout(function () { flist.classList.remove('on'); fin.value = S.draft.family || ''; }, 120); });
+    fin.addEventListener('input', function () { renderFonts(fin.value); flist.classList.add('on'); });
+    fin.addEventListener('keydown', function (ev) {
+      var opts = flist.children;
+      if (ev.key === 'ArrowDown' || ev.key === 'ArrowUp') {
+        ev.preventDefault();
+        hl = Math.max(0, Math.min(opts.length - 1, hl + (ev.key === 'ArrowDown' ? 1 : -1)));
+        Array.prototype.forEach.call(opts, function (o, i) { o.classList.toggle('hl', i === hl); });
+        if (opts[hl]) opts[hl].scrollIntoView({ block: 'nearest' });
+      }
+      if (ev.key === 'Enter' && opts.length) { pickFamily((opts[hl >= 0 ? hl : 0]).firstChild.textContent); fin.blur(); }
+      if (ev.key === 'Escape') fin.blur();
+    });
+    b.appendChild(UI.row('font.family', fp));
+
+    M.style = UI.select({ key: 'font.style', options: [], onChange: function (v) { S.draft.ps = v; textLive(); } });
+    b.appendChild(M.style);
+    function fillStyles(pickDefault) {
+      var st = S.fonts && S.draft.family ? S.fonts.families[S.draft.family] || [] : [];
+      if (pickDefault || !st.some(function (s) { return s.ps === S.draft.ps; })) S.draft.ps = st.length ? (st.filter(function (s) { return /^(regular|book|normal|roman)$/i.test(s.style); })[0] || st[0]).ps : S.draft.ps;
+      M.style.fill(st.map(function (s) { return { v: s.ps, label: s.style }; }), S.draft.ps);
+      ta.style.fontFamily = S.draft.family ? '"' + S.draft.family + '", var(--font)' : '';
+    }
+    M.fontsReady = function () { fin.placeholder = t('font.search'); fin.value = S.draft.family || ''; fillStyles(false); };
+
+    M.size = UI.slider({ key: 'font.size', min: 4, max: 800, step: 1, value: S.draft.size, unit: 'px', floor: 1, def: 200, onInput: function (v) { S.draft.size = v; textLive(); }, onChange: function () { textLive(true); } });
+    M.tracking = UI.slider({ key: 'font.tracking', min: -200, max: 800, step: 1, value: S.draft.tracking, def: 0, onInput: function (v) { S.draft.tracking = v; textLive(); }, onChange: function () { textLive(true); } });
+    M.leading = UI.slider({ key: 'font.leading', min: 0, max: 800, step: 1, value: S.draft.leading, def: 0, onInput: function (v) { S.draft.leading = v; textLive(); }, onChange: function () { textLive(true); } });
+    M.align = UI.seg({ key: 'font.align', value: S.draft.align, options: ['left', 'center', 'right'].map(function (a) { return { v: a, label: t('align.' + a) }; }), onChange: function (v) { S.draft.align = v; textLive(true); } });
+    M.rtl = UI.toggle({ key: 'font.rtl', value: S.draft.rtl, onChange: function (v) { S.draft.rtl = v; rtlNote(); textLive(true); } });
+    M.fill = UI.color({ key: 'font.fill', value: S.draft.fill, onInput: function (c) { S.draft.fill = c; var it = activeItem(); if (isObj(it)) { Viewport.patch(it.ref, 'mat', { fill: c }); live('fill', 'materials.set', { ref: it.ref, values: { fill: c } }); } } });
+    [M.size, M.tracking, M.leading, M.align, M.rtl, M.fill].forEach(function (x) { b.appendChild(x); });
+    var rn = el('div'); b.appendChild(rn);
+    function rtlNote() { rn.innerHTML = ''; if (S.draft.rtl && !(S.info && S.info.paragraphDirection)) rn.appendChild(UI.note(t('rtl.note'), 'warn')); }
+    rtlNote();
+
+    var bt = el('div', 'btns full');
+    bt.appendChild(UI.button('btn.create', { primary: true, icon: 'cube', onClick: doCreate }));
+    M.updBtn = UI.button('btn.update', { icon: 'refresh', onClick: doUpdate });
+    bt.appendChild(M.updBtn);
+    b.appendChild(bt);
+    var bt2 = el('div', 'btns full');
+    bt2.appendChild(UI.button('btn.convert', { icon: 'target', small: true, onClick: doConvert }));
+    b.appendChild(bt2);
+
+    function textArgs() {
+      return { text: S.draft.text, font: S.draft.ps, size: S.draft.size, tracking: S.draft.tracking, leading: S.draft.leading, align: S.draft.align, rtl: S.draft.rtl, fill: S.draft.fill };
+    }
+    function textLive(final) {
+      var it = activeItem();
+      if (!it || it.role !== 'text') return;
+      var a = textArgs(); delete a.text; a.ref = it.ref;
+      live('text', 'text.update', a, final);
+      if (final) setTimeout(refreshSnapshot, 400);
+    }
+    function doCreate() {
+      if (!S.draft.text.trim()) { UI.toast(t('err.EMPTY_TEXT'), 'warn'); return; }
+      var a = textArgs();
+      a.renderer = canGeo('depth') ? null : bestRenderer();
+      return run('text.create', a, t('ok.created')).then(function (r) {
+        if (r.comp) S.comp = r.comp;
+        notesToast(r.notes);
+        // default look so the first result is already a finished 3D title
+        var g = Presets.geometry[2].values;
+        var geo = Object.assign({ origin: 'center' }, g);
+        var jobs = [], e3d = S.mode === 'e3d' && S.info && S.info.e3d;
+        if (canGeo('depth') && !e3d) jobs.push(Host.call('geometry.set', { ref: r.ref, values: geo }));
+        var hasLights = S.items.some(function (i) { return i.role === 'light'; });
+        if (!hasLights && !e3d) jobs.push(Host.call('lights.applyPreset', { lights: Presets.lighting[0].lights, replace: false }));
+        return Promise.all(jobs).then(function () {
+          if (e3d) return Host.call('e3d.create', { textRef: r.ref, templateRef: R.e3d && R.e3d.template ? R.e3d.template() : null });
+        }).then(function () {
+          S.active = r.ref; S.sel = [r.ref]; S.listHash = '';
+          updateChips(); poll(true); refreshActive();
+        });
+      }).catch(function () {});
+    }
+    function doUpdate() {
+      var it = activeItem();
+      if (!it || it.role !== 'text') { UI.toast(t('err.NOT_TEXT'), 'warn'); return; }
+      if (!S.draft.text.trim()) { UI.toast(t('err.EMPTY_TEXT'), 'warn'); return; }
+      var a = textArgs(); a.ref = it.ref; a.recenter = true;
+      return run('text.update', a, t('ok.updated')).then(function (r) { notesToast(r.notes); S.listHash = ''; poll(true); }).catch(function () {});
+    }
+    function doConvert() {
+      return run('text.convertSelected', { renderer: canGeo('depth') ? null : bestRenderer() }).then(function (r) {
+        UI.toast(t('ok.converted', { n: r.refs.length }));
+        if (r.comp) S.comp = r.comp;
+        S.active = r.refs[0]; S.sel = r.refs.slice(); S.listHash = '';
+        updateChips(); poll(true); refreshActive();
+      }).catch(function () {});
+    }
+    function notesToast(notes) {
+      if (!notes || !notes.length) return;
+      if (notes.indexOf('rtl') >= 0) UI.toast(t('rtl.note'), 'warn');
+      else if (notes.indexOf('font') >= 0) UI.toast(t('err.HOST', { e: 'font' }), 'warn');
+    }
+
+    // ---- Element 3D section (Mode A) ----
+    var e3dSec = el('div');
+    pane.appendChild(e3dSec);
+    R.e3d = { refresh: function () { renderE3D(e3dSec); }, template: function () { return R.e3d.tpl ? R.e3d.tpl.get() || null : null; } };
+
+    // ---- geometry ----
+    var gsec = UI.section('geometry', 'sec.geometry');
+    pane.appendChild(gsec);
+    var G = M.geo = {};
+    function gset(values, final) {
+      var it = activeItem();
+      if (!isObj(it)) return;
+      if (values.depth !== undefined && values.origin === undefined) values.origin = G.origin.get();
+      Viewport.patch(it.ref, 'geo', values);
+      markDrag();
+      live('geo', 'geometry.set', { refs: selRefs(), values: values }, final);
+    }
+    G.depth = UI.slider({ key: 'geo.depth', min: 0, max: 1000, step: 1, unit: 'px', floor: 0, def: 50, onInput: function (v) { gset({ depth: v }); }, onChange: function (v) { gset({ depth: v }, true); } });
+    G.origin = UI.seg({ key: 'geo.origin', value: 'front', options: ['front', 'center', 'back'].map(function (o) { return { v: o, label: t('origin.' + o) }; }), onChange: function (v) { gset({ origin: v }, true); } });
+    G.scale = UI.slider({ key: 'geo.scale', min: 0, max: 400, step: 1, unit: '%', floor: 0, def: 100, onInput: function (v) { gset({ depthScale: v }); }, onChange: function (v) { gset({ depthScale: v }, true); } });
+    G.bevel = UI.seg({ key: 'geo.bevelStyle', value: 'none', wide: true, options: ['none', 'angular', 'concave', 'convex'].map(function (o) { return { v: o, label: t('bevel.' + o) }; }), onChange: function (v) { gset({ bevelStyle: v }, true); } });
+    G.bdepth = UI.slider({ key: 'geo.bevelDepth', min: 0, max: 60, step: 0.5, unit: 'px', floor: 0, def: 4, onInput: function (v) { gset({ bevelDepth: v }); }, onChange: function (v) { gset({ bevelDepth: v }, true); } });
+    G.hole = UI.slider({ key: 'geo.holeBevel', min: 0, max: 100, step: 1, unit: '%', hard: true, def: 100, onInput: function (v) { gset({ holeBevel: v }); }, onChange: function (v) { gset({ holeBevel: v }, true); } });
+    G.faceBox = el('div');
+    var fh = el('div', 'sub-h', t('sec.faces'));
+    G.faces = {};
+    G.faceBox.appendChild(fh);
+    ['Front', 'Back', 'Side', 'Bevel'].forEach(function (f) {
+      G.faces[f] = UI.toggle({ key: 'face.' + f, value: true, onChange: function (v) { var o = {}; o[f] = v; gset({ faces: o }, true); } });
+      G.faceBox.appendChild(G.faces[f]);
+    });
+    G.na = el('div');
+    var gpre = el('div', 'grid');
+    gpre.style.marginTop = '10px';
+    Presets.geometry.forEach(function (p) {
+      var c = el('button', 'card', icon('cube', 18) + '<span>' + (I18N.lang === 'ar' ? p.ar : p.en) + '</span>');
+      c.type = 'button';
+      c.onclick = function () { applyGeometry(p.values); };
+      gpre.appendChild(c);
+    });
+    [G.na, G.depth, G.origin, G.scale, G.bevel, G.bdepth, G.hole, G.faceBox, gpre].forEach(function (x) { gsec.body.appendChild(x); });
+
+    M.refresh = function () {
+      var it = activeItem();
+      M.updBtn.disabled = !(it && it.role === 'text');
+      var ok = canGeo('depth');
+      G.na.innerHTML = '';
+      if (!ok) G.na.appendChild(UI.note(t('geo.na'), 'warn'));
+      [G.depth, G.origin, G.scale].forEach(function (x) { x.style.display = ok ? '' : 'none'; });
+      G.bevel.style.display = canGeo('bevelStyle') ? '' : 'none';
+      G.bdepth.style.display = canGeo('bevelDepth') ? '' : 'none';
+      G.hole.style.display = canGeo('holeBevel') ? '' : 'none';
+      gpre.style.display = ok ? '' : 'none';
+      G.faceBox.style.display = ok && it && it.role === 'text' && canSurf('Front', 'opacity') ? '' : 'none';
+      if (R.e3d) R.e3d.refresh();
+      if (!isObj(it)) return;
+      Host.call('geometry.get', { ref: it.ref }).then(function (g) {
+        if (!g || !g.supported) return;
+        G.depth.set(g.depth); G.origin.set(g.origin); G.scale.set(g.depthScale); G.bevel.set(g.bevelStyle); G.bdepth.set(g.bevelDepth); G.hole.set(g.holeBevel);
+        if (g.faces) Object.keys(g.faces).forEach(function (f) { if (G.faces[f]) G.faces[f].set(g.faces[f]); });
+      }).catch(function () {});
+      if (it.role === 'text') {
+        Host.call('text.read', { ref: it.ref }).then(function (d) {
+          if (!d || !d.isText) return;
+          S.draft.text = d.text; ta.value = d.text;
+          S.draft.size = d.size; M.size.set(d.size);
+          S.draft.tracking = d.tracking; M.tracking.set(d.tracking);
+          S.draft.leading = d.leading; M.leading.set(d.leading);
+          S.draft.align = d.align; M.align.set(d.align);
+          S.draft.rtl = !!d.rtl || /[؀-ۿ]/.test(d.text); M.rtl.set(S.draft.rtl); rtlNote();
+          if (d.fill) { S.draft.fill = d.fill; M.fill.set(d.fill); }
+          if (d.font && S.fonts) {
+            for (var fam in S.fonts.families) {
+              if (S.fonts.families[fam].some(function (s) { return s.ps === d.font; })) { S.draft.family = fam; S.draft.ps = d.font; fin.value = fam; fillStyles(false); break; }
+            }
+          }
+        }).catch(function () {});
+      }
+    };
+  }
+
+  function applyGeometry(values, refs) {
+    var it = activeItem();
+    if (!isObj(it)) { UI.toast(t('err.NO_OBJECT'), 'warn'); return Promise.resolve(); }
+    var v = Object.assign({}, values);
+    if (v.origin === undefined && R.main) v.origin = R.main.geo.origin.get();
+    Viewport.patch(it.ref, 'geo', v);
+    return run('geometry.set', { refs: refs || selRefs(), values: v }, t('ok.updated')).then(function () { if (R.main) R.main.refresh(); }).catch(function () {});
+  }
+
+  /* ---------- Element 3D (Mode A) ---------- */
+  function renderE3D(box) {
+    box.innerHTML = '';
+    if (S.mode !== 'e3d') return;
+    var sec = UI.section('e3d', 'sec.e3d', { badge: 'Mode A' });
+    box.appendChild(sec);
+    var b = sec.body;
+    if (!(S.info && S.info.e3d)) { b.appendChild(UI.note(t('e3d.missing'), 'warn')); return; }
+    b.appendChild(UI.note(t('e3d.step')));
+    Host.call('e3d.list', {}).then(function (list) {
+      var tpls = list.filter(function (l) { return l.template; });
+      R.e3d.tpl = UI.select({ key: 'e3d.template', options: [{ v: '', label: t('e3d.noTemplate') }].concat(tpls.map(function (l) { return { v: l.ref, label: l.name }; })), value: '' });
+      b.appendChild(R.e3d.tpl);
+      var it = activeItem();
+      var bt = el('div', 'btns');
+      if (it && (it.role === 'text' || it.role === 'shape')) {
+        bt.appendChild(UI.button('btn.e3dCreate', { primary: true, icon: 'link', onClick: function () {
+          return run('e3d.create', { textRef: it.ref, templateRef: R.e3d.tpl.get() || null }, t('ok.created')).then(function (r) { S.listHash = ''; S.active = r.ref; poll(true); }).catch(function () {});
+        } }));
+      }
+      if (it && (it.role === 'e3d' || it.role === 'e3dtpl')) {
+        bt.appendChild(UI.button('e3d.open', { icon: 'settings', onClick: function () { return quiet('e3d.select', { ref: it.ref }); } }));
+        if (it.role === 'e3d') bt.appendChild(UI.button('e3d.markTpl', { icon: 'download', onClick: function () {
+          return UI.prompt(t('pre.name'), it.name).then(function (n) { if (n) return run('e3d.markTemplate', { ref: it.ref, name: n }, t('pre.saved')).then(function () { S.listHash = ''; poll(true); renderE3D(box); }); });
+        } }));
+      }
+      b.appendChild(bt);
+      if (it && (it.role === 'e3d' || it.role === 'e3dtpl')) paramsInspector(b, it.ref);
+    }).catch(App.error);
+  }
+
+  // Generic inspector: shows the real parameters an effect exposes, with its own names.
+  function paramsInspector(parent, ref) {
+    var holder = el('div');
+    holder.appendChild(el('div', 'sub-h', t('e3d.params')));
+    parent.appendChild(holder);
+    Host.call('e3d.params', { ref: ref }).then(function (params) {
+      var groups = {};
+      params.forEach(function (p) { (groups[p.group || '—'] = groups[p.group || '—'] || []).push(p); });
+      Object.keys(groups).forEach(function (g, gi) {
+        var s = UI.section('e3dp_' + gi, 'x', { closed: gi > 0 });
+        s.head.querySelector('.sec-t').textContent = g;
+        holder.appendChild(s);
+        groups[g].forEach(function (p) {
+          var send = function (v, final) { live('e3d' + p.path.join('_'), 'e3d.setParam', { ref: ref, path: p.path, type: p.type, value: v }, final); };
+          var ctl;
+          if (p.type === 'num' || p.type === 'menu') {
+            var mn = p.min !== undefined ? p.min : 0, mx = p.max !== undefined ? p.max : Math.max(100, Math.abs(p.value) * 4);
+            if (mx - mn > 100000) { mn = Math.min(p.value, 0); mx = Math.max(p.value * 4, 1000); }
+            ctl = UI.slider({ key: 'x', min: mn, max: mx, step: p.type === 'menu' ? 1 : (mx - mn > 50 ? 1 : 0.01), value: p.value, hard: p.min !== undefined && p.max !== undefined, onInput: function (v) { send(v); }, onChange: function (v) { send(v, true); } });
+          } else if (p.type === 'color') {
+            ctl = UI.color({ key: 'x', value: p.value, onInput: function (c) { send(c); }, onChange: function (c) { send(c, true); } });
+          } else if (p.type === 'vec2' || p.type === 'vec3') {
+            ctl = UI.vec({ key: 'x', axes: p.type === 'vec2' ? 2 : 3, value: p.value, step: 1, onInput: function (v) { send(v); }, onChange: function (v) { send(v, true); } });
+          } else return;
+          ctl.label.textContent = p.name;
+          ctl.label.removeAttribute('data-tip');
+          s.body.appendChild(ctl);
+        });
+      });
+    }).catch(App.error);
+  }
+
+  /* ====================== SCENE ====================== */
+  function buildScene(pane) {
+    var M = R.scene = {};
+    var sec = UI.section('objects', 'sec.objects');
+    pane.appendChild(sec);
+    var list = el('div', 'olist');
+    sec.body.appendChild(list);
+    var acts = el('div', 'btns');
+    acts.appendChild(UI.button('act.duplicate', { small: true, icon: 'copy', onClick: function () {
+      var it = activeItem(); if (!it) return;
+      return run('scene.duplicate', { ref: it.ref, offset: [60, 60, 0] }).then(function (r) { S.active = r.ref; S.sel = [r.ref]; S.listHash = ''; poll(true); });
+    } }));
+    acts.appendChild(UI.button('act.group', { small: true, icon: 'group', onClick: function () {
+      var refs = S.sel.length ? S.sel : (S.active ? [S.active] : []);
+      if (!refs.length) return;
+      return run('scene.group', { refs: refs, name: 'Group' }).then(function () { S.listHash = ''; poll(true); });
+    } }));
+    acts.appendChild(UI.button('act.ungroup', { small: true, icon: 'ungroup', onClick: function () {
+      var g = S.items.filter(function (i) { return i.role === 'group' && (S.sel.indexOf(i.ref) >= 0 || i.ref === S.active); })[0];
+      var it = activeItem();
+      if (!g && it && it.parent) g = { ref: it.parent };
+      if (!g) return;
+      return run('scene.ungroup', { ref: g.ref }).then(function () { S.listHash = ''; poll(true); });
+    } }));
+    acts.appendChild(UI.button('act.delete', { small: true, icon: 'trash', danger: true, onClick: function () {
+      var refs = S.sel.length ? S.sel : (S.active ? [S.active] : []);
+      if (!refs.length) return;
+      return UI.confirm(t('confirm.delete', { n: refs.length }), true).then(function (ok) {
+        if (!ok) return;
+        return run('scene.remove', { refs: refs }).then(function () { S.sel = []; S.active = null; S.listHash = ''; poll(true); });
+      });
+    } }));
+    sec.body.appendChild(acts);
+
+    M.renderList = function () {
+      list.innerHTML = '';
+      if (!S.comp) { list.appendChild(el('div', 'empty', t('scene.nocomp'))); return; }
+      var shown = S.items.filter(function (i) { return i.is3D || i.tagged || i.role === 'bg' || i.role === 'env'; });
+      if (!shown.length) { list.appendChild(el('div', 'empty', t('scene.empty'))); return; }
+      var roleIcon = { text: 'text', shape: 'cube', light: 'bulb', camera: 'camera', group: 'group', bg: 'image', env: 'environment', e3d: 'cube', e3dtpl: 'presets', envlight: 'sun', layer: 'cube' };
+      shown.forEach(function (it) {
+        var row = el('div', 'oitem' + (S.sel.indexOf(it.ref) >= 0 ? ' sel' : '') + (it.ref === S.active ? ' active' : '') + (it.enabled ? '' : ' off') + (it.parent ? ' child' : ''));
+        row.innerHTML = '<span class="ic-role">' + icon(roleIcon[it.role] || 'cube', 14) + '</span>';
+        var nm = el('span', 'oname'); nm.textContent = it.name; row.appendChild(nm);
+        row.appendChild(el('span', 'orole', t('role.' + it.role)));
+        row.appendChild(UI.iconBtn(it.enabled ? 'eye' : 'eyeOff', t('act.hide'), function () { quiet('scene.setFlags', { ref: it.ref, enabled: !it.enabled }).then(function () { S.listHash = ''; poll(true); }); }));
+        var lk = UI.iconBtn(it.locked ? 'lock' : 'unlock', t('act.lock'), function () { quiet('scene.setFlags', { ref: it.ref, locked: !it.locked }).then(function () { S.listHash = ''; poll(true); }); });
+        if (it.locked) lk.classList.add('on');
+        row.appendChild(lk);
+        row.onclick = function (ev) {
+          if (ev.ctrlKey || ev.metaKey || ev.shiftKey) {
+            var i = S.sel.indexOf(it.ref);
+            if (i >= 0) S.sel.splice(i, 1); else S.sel.push(it.ref);
+            M.renderList();
+            return;
+          }
+          S.sel = [it.ref];
+          if (it.role === 'light') { S.light = it.ref; S.tab = 'lighting'; buildTabs(); showPane(); return; }
+          if (it.role === 'camera') { S.tab = 'camera'; buildTabs(); showPane(); return; }
+          if (it.role === 'bg' || it.role === 'env') { S.tab = 'environment'; buildTabs(); showPane(); return; }
+          setActive(it.ref);
+        };
+        nm.ondblclick = function (ev) {
+          ev.stopPropagation();
+          var inp = el('input', 'txt'); inp.value = it.name;
+          nm.replaceWith(inp); inp.focus(); inp.select();
+          var done = false;
+          function commit(save) {
+            if (done) return; done = true;
+            if (save && inp.value.trim() && inp.value !== it.name) quiet('scene.rename', { ref: it.ref, name: inp.value.trim() }).then(function () { S.listHash = ''; poll(true); });
+            else M.renderList();
+          }
+          inp.onkeydown = function (e2) { if (e2.key === 'Enter') commit(true); if (e2.key === 'Escape') commit(false); };
+          inp.onblur = function () { commit(true); };
+          inp.onclick = function (e3) { e3.stopPropagation(); };
+        };
+        nm.setAttribute('data-tip', t('act.rename'));
+        list.appendChild(row);
+      });
+    };
+
+    // transform
+    var ts = UI.section('transform', 'sec.transform');
+    pane.appendChild(ts);
+    function tset(values, final) {
+      var it = activeItem(); if (!it) return;
+      markDrag();
+      Viewport.patch(it.ref, 'transform', values);
+      live('tf', 'scene.setTransform', { ref: it.ref, values: values }, final);
+    }
+    M.pos = UI.vec({ key: 'tf.position', step: 1, onInput: function (v) { tset({ position: v }); }, onChange: function (v) { tset({ position: v }, true); } });
+    M.ori = UI.vec({ key: 'tf.orientation', step: 0.1, onInput: function (v) { tset({ orientation: v }); }, onChange: function (v) { tset({ orientation: v }, true); } });
+    M.rx = UI.slider({ key: 'tf.rx', min: -180, max: 180, step: 0.1, unit: '°', def: 0, onInput: function (v) { tset({ rx: v }); }, onChange: function (v) { tset({ rx: v }, true); } });
+    M.ry = UI.slider({ key: 'tf.ry', min: -180, max: 180, step: 0.1, unit: '°', def: 0, onInput: function (v) { tset({ ry: v }); }, onChange: function (v) { tset({ ry: v }, true); } });
+    M.rz = UI.slider({ key: 'tf.rz', min: -180, max: 180, step: 0.1, unit: '°', def: 0, onInput: function (v) { tset({ rz: v }); }, onChange: function (v) { tset({ rz: v }, true); } });
+    M.scale = UI.vec({ key: 'tf.scale', step: 0.1, link: true, onInput: function (v) { tset({ scale: v }); }, onChange: function (v) { tset({ scale: v }, true); } });
+    M.anchor = UI.vec({ key: 'tf.anchor', step: 0.1, onInput: function (v) { tset({ anchor: v }); }, onChange: function (v) { tset({ anchor: v }, true); } });
+    M.opacity = UI.slider({ key: 'tf.opacity', min: 0, max: 100, step: 1, unit: '%', hard: true, def: 100, onInput: function (v) { tset({ opacity: v }); }, onChange: function (v) { tset({ opacity: v }, true); } });
+    [M.pos, M.ori, M.rx, M.ry, M.rz, M.scale, M.anchor, M.opacity].forEach(function (x) { ts.body.appendChild(x); });
+    var tb = el('div', 'btns');
+    tb.appendChild(UI.button('act.center', { small: true, icon: 'target', onClick: function () { var it = activeItem(); if (it) return run('scene.centerAnchor', { ref: it.ref }).then(function (r) { fillT(r); refreshSnapshot(); }); } }));
+    tb.appendChild(UI.button('act.reset', { small: true, icon: 'reset', onClick: function () { var it = activeItem(); if (it) return run('scene.resetTransform', { ref: it.ref }).then(function (r) { fillT(r); refreshSnapshot(); }); } }));
+    ts.body.appendChild(tb);
+    function fillT(tf) {
+      if (!tf) return;
+      M.pos.set(tf.position); M.ori.set(tf.orientation); M.rx.set(tf.rx); M.ry.set(tf.ry); M.rz.set(tf.rz);
+      if (tf.scale) M.scale.set(tf.scale); if (tf.anchor) M.anchor.set(tf.anchor); if (tf.opacity !== undefined) M.opacity.set(tf.opacity);
+    }
+    M.refresh = function () {
+      M.renderList();
+      var it = activeItem();
+      ts.style.display = it ? '' : 'none';
+      if (it && !dragging()) Host.call('scene.getTransform', { ref: it.ref }).then(fillT).catch(function () {});
+    };
+  }
+
+  /* ====================== MATERIALS ====================== */
+  var MAT_SLIDERS = [['ambient', 0, 100], ['diffuse', 0, 100], ['specular', 0, 100], ['shininess', 0, 100], ['metal', 0, 100], ['reflection', 0, 100],
+                     ['gloss', 0, 100], ['fresnel', 0, 100], ['transparency', 0, 100], ['transRolloff', 0, 100], ['ior', 1, 5, 0.01], ['lightTrans', 0, 100]];
+  var MAT_TOGGLES = ['castsShadows', 'acceptsShadows', 'acceptsLights', 'appearsInRefl'];
+
+  function buildMaterials(pane) {
+    var M = R.materials = {};
+    var e3dBox = el('div');
+    pane.appendChild(e3dBox);
+    var sec = UI.section('surface', 'sec.surface');
+    pane.appendChild(sec);
+    M.surf = UI.seg({ value: S.surface, options: ['all', 'Front', 'Bevel', 'Side', 'Back'].map(function (s) { return { v: s, label: t('surf.' + s) }; }), onChange: function (v) { S.surface = v; M.refresh(); } });
+    sec.body.appendChild(M.surf);
+    M.surfNote = el('div');
+    sec.body.appendChild(M.surfNote);
+
+    var ps = UI.section('matProps', 'sec.matProps');
+    pane.appendChild(ps);
+    M.color = UI.color({ key: 'mat.color', onInput: function (c) { mset('color', c); }, onChange: function (c) { mset('color', c, true); } });
+    M.opacity = UI.slider({ key: 'mat.opacity', min: 0, max: 100, step: 1, unit: '%', hard: true, def: 100, onInput: function (v) { mset('opacity', v); }, onChange: function (v) { mset('opacity', v, true); } });
+    ps.body.appendChild(M.color); ps.body.appendChild(M.opacity);
+    M.sl = {}; M.tg = {};
+    MAT_SLIDERS.forEach(function (d) {
+      M.sl[d[0]] = UI.slider({ key: 'mat.' + d[0], min: d[1], max: d[2], step: d[3] || 1, unit: d[0] === 'ior' ? '' : '%', hard: true,
+        onInput: function (v) { mset(d[0], v); }, onChange: function (v) { mset(d[0], v, true); } });
+      ps.body.appendChild(M.sl[d[0]]);
+    });
+    MAT_TOGGLES.forEach(function (k) {
+      M.tg[k] = UI.toggle({ key: 'mat.' + k, onChange: function (v) { mset(k, v ? 1 : 0, true); } });
+      ps.body.appendChild(M.tg[k]);
+    });
+    M.hidden = el('div'); ps.body.appendChild(M.hidden);
+    var pb = el('div', 'btns');
+    M.resetBtn = UI.button('mat.reset', { small: true, icon: 'reset', onClick: function () {
+      var it = activeItem(); if (!it || S.surface === 'all') return;
+      return run('materials.set', { refs: selRefs(), values: { clearSurface: S.surface } }, t('ok.updated')).then(function () { M.refresh(); refreshSnapshot(); });
+    } });
+    pb.appendChild(M.resetBtn);
+    pb.appendChild(UI.button('mat.save', { small: true, icon: 'download', onClick: function () { return savePreset('material'); } }));
+    ps.body.appendChild(pb);
+
+    var pr = UI.section('matPresets', 'sec.matPresets');
+    pane.appendChild(pr);
+    M.grid = el('div', 'grid');
+    pr.body.appendChild(M.grid);
+
+    function mset(k, v, final) {
+      var it = activeItem(); if (!isObj(it)) return;
+      var values = {};
+      if (S.surface === 'all') {
+        if (k === 'color') values.fill = v;
+        else if (k !== 'opacity') { values.layer = {}; values.layer[k] = v; }
+      } else {
+        values.surfaces = {}; values.surfaces[S.surface] = {}; values.surfaces[S.surface][k] = v;
+      }
+      markDrag();
+      Viewport.patch(it.ref, 'mat', values);
+      live('mat_' + S.surface + k, 'materials.set', { refs: selRefs(), values: values }, final);
+    }
+
+    M.refresh = function () {
+      e3dBox.innerHTML = '';
+      var it = activeItem();
+      if (S.mode === 'e3d') {
+        e3dBox.appendChild(UI.note(t('mat.e3d')));
+        if (it && (it.role === 'e3d' || it.role === 'e3dtpl')) paramsInspector(e3dBox, it.ref);
+      }
+      M.surfNote.innerHTML = '';
+      var isText = it && it.role === 'text';
+      if (!isText && it && S.surface !== 'all') { S.surface = 'all'; M.surf.set('all'); }
+      Object.keys(M.surf.btns).forEach(function (k) { M.surf.btns[k].style.display = (k === 'all' || (isText && canSurf(k, 'color'))) ? '' : 'none'; });
+      if (it && !isText) M.surfNote.appendChild(UI.note(t('mat.surfNA')));
+      var all = S.surface === 'all', hidden = 0;
+      M.opacity.style.display = !all && canSurf(S.surface, 'opacity') ? '' : 'none';
+      MAT_SLIDERS.forEach(function (d) {
+        var ok = all ? canMat(d[0]) : canSurf(S.surface, d[0]);
+        M.sl[d[0]].style.display = ok ? '' : 'none';
+        if (!ok) hidden++;
+      });
+      MAT_TOGGLES.forEach(function (k) { var ok = all && canMat(k); M.tg[k].style.display = ok ? '' : 'none'; if (!ok && all) hidden++; });
+      M.hidden.innerHTML = '';
+      if (hidden) M.hidden.appendChild(UI.note(t('mat.hidden', { n: hidden })));
+      M.resetBtn.style.display = all ? 'none' : '';
+      renderGrid();
+      if (!isObj(it)) return;
+      Host.call('materials.get', { ref: it.ref }).then(function (m) {
+        if (!m) return;
+        var src = all ? m.layer : (m.surfaces[S.surface] || {});
+        M.color.set(all ? m.fill : (src.color || m.fill));
+        if (!all) M.opacity.set(src.opacity !== undefined ? src.opacity : 100);
+        MAT_SLIDERS.forEach(function (d) { var v = src[d[0]]; if (v === undefined) v = m.layer[d[0]]; if (typeof v === 'number') M.sl[d[0]].set(v); });
+        MAT_TOGGLES.forEach(function (k) { if (m.layer[k] !== undefined && m.layer[k] !== null) M.tg[k].set(!!m.layer[k]); });
+      }).catch(function () {});
+    };
+
+    function renderGrid() {
+      M.grid.innerHTML = '';
+      Presets.material.concat(userPresets('material')).forEach(function (p) {
+        var sw = p.swatch || [UI.toHex((p.surfaces && p.surfaces.Bevel && p.surfaces.Bevel.color) || p.fill || [1, 1, 1]), UI.toHex((p.surfaces && p.surfaces.Front && p.surfaces.Front.color) || p.fill || [0.6, 0.6, 0.6]), UI.toHex((p.surfaces && p.surfaces.Side && p.surfaces.Side.color) || [0.2, 0.2, 0.2])];
+        var na = p.needs && p.needs.some(function (k) { return !canMat(k); });
+        var c = el('button', 'card' + (na ? ' na' : ''), '<span class="ball" style="background: radial-gradient(circle at 34% 30%, ' + sw[0] + ' 0%, ' + sw[1] + ' 45%, ' + sw[2] + ' 100%)"></span><span></span>');
+        c.lastChild.textContent = p.name || (I18N.lang === 'ar' ? p.ar : p.en);
+        c.type = 'button';
+        c.onclick = function () { applyMaterial(p); };
+        M.grid.appendChild(c);
+      });
+    }
+  }
+
+  function applyMaterial(p) {
+    var it = activeItem();
+    if (!isObj(it)) { UI.toast(t('err.NO_OBJECT'), 'warn'); return Promise.resolve(); }
+    var layer = {}, k, values = {};
+    for (k in (p.layer || {})) {
+      if (!canMat(k)) continue;
+      layer[k] = typeof p.layer[k] === 'boolean' ? (p.layer[k] ? 1 : 0) : p.layer[k];
+    }
+    values.layer = layer;
+    var front = p.surfaces && p.surfaces.Front && p.surfaces.Front.color;
+    if (p.fill || front) values.fill = p.fill || front;
+    if (it.role === 'text' && p.surfaces) {
+      values.surfaces = {};
+      Object.keys(p.surfaces).forEach(function (s) {
+        var o = {};
+        Object.keys(p.surfaces[s]).forEach(function (kk) { if (canSurf(s, kk)) o[kk] = p.surfaces[s][kk]; });
+        if (Object.keys(o).length) values.surfaces[s] = o;
+      });
+    }
+    Viewport.patch(it.ref, 'mat', values);
+    return run('materials.set', { refs: selRefs(), values: values }).then(function (r) {
+      var sk = r && r.skipped ? r.skipped.length : 0;
+      UI.toast(sk ? t('mat.skipped', { n: sk }) : t('ok.updated'), sk ? 'warn' : 'ok');
+      if (R.materials) R.materials.refresh();
+      refreshSnapshot();
+    }).catch(function () {});
+  }
+
+  /* ====================== ENVIRONMENT (background + env) ====================== */
+  function buildEnv(pane) {
+    var M = R.env = {};
+    var bs = UI.section('bg', 'sec.bg');
+    pane.appendChild(bs);
+    var cur = { type: 'solid' };
+    function bset(values, final) {
+      Object.assign(cur, values);
+      Viewport.patchBg(Object.assign({ enabled: cur.type !== 'transparent' }, cur));
+      live('bg', 'background.set', { values: values }, final);
+      if (final) setTimeout(function () { S.listHash = ''; poll(true); }, 300);
+    }
+    M.type = UI.seg({ key: 'bg.type', wide: true, value: 'solid', options: ['solid', 'gradient', 'image', 'video', 'transparent'].map(function (v) { return { v: v, label: t('bg.' + v) }; }),
+      onChange: function (v) {
+        if ((v === 'image' || v === 'video') && !(cur.file && cur.type === v)) { pickBgFile(v); return; }
+        bset({ type: v }, true); vis();
+      } });
+    M.color = UI.color({ key: 'bg.color', value: [0.05, 0.04, 0.08], onInput: function (c) { bset({ color: c }); }, onChange: function (c) { bset({ color: c }, true); } });
+    M.g1 = UI.color({ key: 'bg.g1', value: [0.2, 0.08, 0.45], onInput: function (c) { bset({ g1: c }); }, onChange: function (c) { bset({ g1: c }, true); } });
+    M.g2 = UI.color({ key: 'bg.g2', value: [0.03, 0.02, 0.06], onInput: function (c) { bset({ g2: c }); }, onChange: function (c) { bset({ g2: c }, true); } });
+    M.angle = UI.slider({ key: 'bg.angle', min: 0, max: 360, step: 1, unit: '°', def: 90, onInput: function (v) { bset({ angle: v }); }, onChange: function (v) { bset({ angle: v }, true); } });
+    M.radial = UI.toggle({ key: 'bg.radial', onChange: function (v) { bset({ radial: v }, true); } });
+    M.file = el('div', 'btns');
+    M.file.appendChild(UI.button('bg.file', { small: true, icon: 'folder', onClick: function () { pickBgFile(cur.type === 'video' ? 'video' : 'image'); } }));
+    M.file.appendChild(UI.button('bg.fit', { small: true, icon: 'frame', onClick: function () { bset({ fit: true }, true); } }));
+    M.opacity = UI.slider({ key: 'bg.opacity', min: 0, max: 100, step: 1, unit: '%', hard: true, def: 100, onInput: function (v) { bset({ opacity: v }); }, onChange: function (v) { bset({ opacity: v }, true); } });
+    M.blur = UI.slider({ key: 'bg.blur', min: 0, max: 200, step: 0.5, floor: 0, def: 0, onInput: function (v) { bset({ blur: v }); }, onChange: function (v) { bset({ blur: v }, true); } });
+    M.scale = UI.slider({ key: 'bg.scale', min: 10, max: 400, step: 1, unit: '%', floor: 1, def: 100, onInput: function (v) { bset({ scale: v }); }, onChange: function (v) { bset({ scale: v }, true); } });
+    M.pos = UI.vec({ key: 'bg.position', axes: 2, step: 1, onInput: function (v) { bset({ position: v }); }, onChange: function (v) { bset({ position: v }, true); } });
+    M.rot = UI.slider({ key: 'bg.rotation', min: -180, max: 180, step: 0.1, unit: '°', def: 0, onInput: function (v) { bset({ rotation: v }); }, onChange: function (v) { bset({ rotation: v }, true); } });
+    [M.type, M.color, M.g1, M.g2, M.angle, M.radial, M.file, M.opacity, M.blur, M.scale, M.pos, M.rot].forEach(function (x) { bs.body.appendChild(x); });
+    bs.body.appendChild(UI.note(t('bg.note')));
+    function vis() {
+      var ty = cur.type, tr = ty === 'transparent', file = ty === 'image' || ty === 'video';
+      M.color.style.display = ty === 'solid' ? '' : 'none';
+      [M.g1, M.g2, M.angle, M.radial].forEach(function (x) { x.style.display = ty === 'gradient' ? '' : 'none'; });
+      M.file.style.display = file ? '' : 'none';
+      [M.opacity, M.blur, M.scale, M.pos, M.rot].forEach(function (x) { x.style.display = tr ? 'none' : ''; });
+    }
+    function pickBgFile(kind) {
+      var types = kind === 'video' ? ['mp4', 'mov', 'avi', 'webm', 'mxf'] : ['png', 'jpg', 'jpeg', 'tif', 'tiff', 'psd', 'exr', 'hdr', 'webp'];
+      var f = Dialog.open(types, t('bg.file'));
+      if (!f) { M.type.set(cur.type); return; }
+      cur.file = f;
+      return run('background.set', { values: { type: kind, file: f, fit: true } }, t('ok.updated')).then(function (r) { fill(r); S.listHash = ''; poll(true); }).catch(function () { M.type.set(cur.type); });
+    }
+    function fill(b) {
+      if (!b) { vis(); return; }
+      cur = Object.assign(cur, b);
+      M.type.set(b.type);
+      if (b.color) M.color.set(b.color);
+      if (b.g1) M.g1.set(b.g1); if (b.g2) M.g2.set(b.g2);
+      if (b.angle !== undefined) M.angle.set((b.angle + 360) % 360);
+      M.radial.set(!!b.radial);
+      M.opacity.set(b.opacity); M.blur.set(b.blur); M.scale.set(b.scale); if (b.position) M.pos.set(b.position); M.rot.set(b.rotation);
+      vis();
+    }
+
+    // environment
+    var es = UI.section('env', 'sec.env');
+    pane.appendChild(es);
+    var eb = es.body;
+    var ebtn = el('div', 'btns');
+    ebtn.appendChild(UI.button('env.import', { icon: 'upload', onClick: function () {
+      var f = Dialog.open(['hdr', 'exr', 'jpg', 'jpeg', 'png', 'tif', 'tiff'], t('env.import'));
+      if (!f) return;
+      return run('environment.set', { values: { file: f } }, t('ok.updated')).then(function (r) { envFill(r); S.listHash = ''; poll(true); }).catch(function () {});
+    } }));
+    eb.appendChild(ebtn);
+    M.envInfo = el('div'); eb.appendChild(M.envInfo);
+    M.envCtl = el('div'); eb.appendChild(M.envCtl);
+    function eset(values, final) { live('env', 'environment.set', { values: values }, final); }
+    M.exp = UI.slider({ key: 'env.exposure', min: -5, max: 5, step: 0.05, def: 0, onInput: function (v) { eset({ exposure: v }); }, onChange: function (v) { eset({ exposure: v }, true); } });
+    M.bri = UI.slider({ key: 'env.brightness', min: -150, max: 150, step: 1, def: 0, hard: true, onInput: function (v) { eset({ brightness: v }); }, onChange: function (v) { eset({ brightness: v }, true); } });
+    M.con = UI.slider({ key: 'env.contrast', min: -100, max: 100, step: 1, def: 0, hard: true, onInput: function (v) { eset({ contrast: v }); }, onChange: function (v) { eset({ contrast: v }, true); } });
+    M.sat = UI.slider({ key: 'env.saturation', min: -100, max: 100, step: 1, def: 0, hard: true, onInput: function (v) { eset({ saturation: v }); }, onChange: function (v) { eset({ saturation: v }, true); } });
+    M.erot = UI.slider({ key: 'env.rotation', min: 0, max: 360, step: 1, unit: '°', def: 0, onInput: function (v) { eset({ rotation: v }); }, onChange: function (v) { eset({ rotation: v }, true); } });
+    M.eon = UI.toggle({ key: 'env.enabled', value: true, onChange: function (v) { eset({ enabled: v }, true); } });
+    var epre = el('div', 'grid'); epre.style.margin = '6px 0';
+    Presets.environment.concat(userPresets('environment')).forEach(function (p) {
+      var c = el('button', 'card', icon('sun', 16) + '<span></span>'); c.type = 'button';
+      c.lastChild.textContent = p.name || (I18N.lang === 'ar' ? p.ar : p.en);
+      c.onclick = function () { run('environment.set', { values: p.values || p.data }, t('ok.updated')).then(envFill).catch(function () {}); };
+      epre.appendChild(c);
+    });
+    M.lightProps = el('div');
+    var eacts = el('div', 'btns');
+    M.bits = UI.button('env.bits', { small: true, icon: 'settings', onClick: function () { return run('environment.setProjectBits', { bits: 32 }, t('ok.updated')).then(function () { M.bits.style.display = 'none'; }); } });
+    eacts.appendChild(M.bits);
+    eacts.appendChild(UI.button('env.remove', { small: true, danger: true, icon: 'trash', onClick: function () { return run('environment.remove', {}, t('ok.updated')).then(function (r) { envFill(r); S.listHash = ''; poll(true); }); } }));
+    [epre, M.exp, M.bri, M.con, M.sat, M.erot, M.eon, M.lightProps, eacts].forEach(function (x) { M.envCtl.appendChild(x); });
+
+    function envFill(e) {
+      M.envInfo.innerHTML = '';
+      if (!e) return;
+      M.envInfo.appendChild(UI.note(t(e.mode === 'light' ? 'env.modeLight' : 'env.modeLayer')));
+      (e.notes || []).forEach(function (n) { M.envInfo.appendChild(UI.note(t(n === 'envSourceManual' ? 'env.manualSource' : 'env.manualLayer'), 'warn')); });
+      M.envCtl.style.display = e.active ? '' : 'none';
+      if (!e.active) { M.envInfo.appendChild(UI.note(t('env.none'))); return; }
+      if (e.file) { var fn = el('p', 'note'); fn.textContent = e.file.split(/[\\/]/).pop(); M.envInfo.appendChild(fn); }
+      if (e.exposure !== undefined) M.exp.set(e.exposure);
+      if (e.brightness !== undefined) M.bri.set(e.brightness);
+      if (e.contrast !== undefined) M.con.set(e.contrast);
+      if (e.saturation !== undefined) M.sat.set(e.saturation);
+      if (e.rotation !== undefined) M.erot.set((e.rotation + 360) % 360);
+      if (e.enabled !== undefined) M.eon.set(e.enabled);
+      var hdr = e.file && /\.(hdr|exr)$/i.test(e.file);
+      M.bits.style.display = hdr && S.info && S.info.project && S.info.project.bits !== 32 ? '' : 'none';
+      M.lightProps.innerHTML = '';
+      if (e.lightProps && e.lightProps.length) {
+        M.lightProps.appendChild(el('div', 'sub-h', t('env.lightProps')));
+        e.lightProps.forEach(function (p) {
+          var send = function (v, final) { live('envl' + p.index, 'environment.set', { values: { lightProps: [{ index: p.index, type: p.type, value: v }] } }, final); };
+          var ctl = p.type === 'color' ? UI.color({ key: 'x', value: p.value, onInput: function (c) { send(c); }, onChange: function (c) { send(c, true); } })
+            : UI.slider({ key: 'x', min: p.min !== null ? p.min : 0, max: p.max !== null ? Math.min(p.max, 1000) : Math.max(200, p.value * 3), step: 0.1, value: p.value, onInput: function (v) { send(v); }, onChange: function (v) { send(v, true); } });
+          ctl.label.textContent = p.name;
+          M.lightProps.appendChild(ctl);
+        });
+      }
+    }
+    M.refresh = function () {
+      if (!S.comp) return;
+      Host.call('background.get', {}).then(fill).catch(function () {});
+      Host.call('environment.get', {}).then(envFill).catch(function () {});
+    };
+    vis();
+  }
+
+  /* ====================== LIGHTING ====================== */
+  function buildLights(pane) {
+    var M = R.lights = {};
+    var ps = UI.section('lightPresets', 'sec.lightPresets');
+    pane.appendChild(ps);
+    var replace = UI.toggle({ key: 'light.replace', value: true });
+    var grid = el('div', 'grid');
+    Presets.lighting.concat(userPresets('lighting')).forEach(function (p) {
+      var c = el('button', 'card', icon('bulb', 18) + '<span></span>'); c.type = 'button';
+      c.lastChild.textContent = p.name || t(p.key);
+      c.onclick = function () {
+        if (!S.comp) { UI.toast(t('err.NO_COMP'), 'warn'); return; }
+        var lights = (p.lights || (p.data && p.data.lights) || []);
+        run('lights.applyPreset', { lights: lights, replace: replace.get() }, t('ok.updated')).then(function (l) { M.data = l; S.light = l.length ? l[0].ref : null; M.render(); S.listHash = ''; poll(true); }).catch(function () {});
+      };
+      grid.appendChild(c);
+    });
+    ps.body.appendChild(grid); ps.body.appendChild(replace);
+
+    var ls = UI.section('lights', 'sec.lights');
+    pane.appendChild(ls);
+    var list = el('div', 'olist'); ls.body.appendChild(list);
+    var add = el('div', 'btns');
+    [['point', 'bulb'], ['spot', 'spot'], ['parallel', 'sun'], ['ambient', 'environment']].forEach(function (x) {
+      add.appendChild(UI.button('light.' + x[0], { small: true, icon: 'plus', onClick: function () {
+        if (!S.comp) { UI.toast(t('err.NO_COMP'), 'warn'); return; }
+        var c = S.comp, v = { type: x[0], name: t('light.' + x[0]) + ' Light', intensity: 100, color: [1, 1, 1] };
+        if (x[0] !== 'ambient') { v.position = [c.w / 2 - 500, c.h / 2 - 500, -900]; v.poi = [c.w / 2, c.h / 2, 0]; }
+        return run('lights.add', { values: v }).then(function (l) { S.light = l.ref; M.refresh(); S.listHash = ''; poll(true); });
+      } }));
+    });
+    ls.body.appendChild(add);
+
+    var props = UI.section('lightProps', 'sec.lightProps');
+    pane.appendChild(props);
+    function lset(values, final) {
+      if (!S.light) return;
+      var d = (M.data || []).filter(function (l) { return l.ref === S.light; })[0];
+      if (d) { Object.assign(d, values); Viewport.patchLights(M.data.filter(function (l) { return l.enabled; })); }
+      markDrag();
+      live('light' + S.light, 'lights.set', { ref: S.light, values: values }, final);
+    }
+    M.type = UI.select({ key: 'bg.type', options: ['point', 'spot', 'parallel', 'ambient'].map(function (v) { return { v: v, label: t('light.' + v) }; }), onChange: function (v) { lset({ type: v }, true); setTimeout(M.refresh, 300); } });
+    M.on = UI.toggle({ key: 'light.enabled', onChange: function (v) { lset({ enabled: v }, true); } });
+    M.color = UI.color({ key: 'light.color', onInput: function (c) { lset({ color: c }); }, onChange: function (c) { lset({ color: c }, true); } });
+    M.int = UI.slider({ key: 'light.intensity', min: 0, max: 400, step: 1, unit: '%', floor: 0, def: 100, onInput: function (v) { lset({ intensity: v }); }, onChange: function (v) { lset({ intensity: v }, true); } });
+    M.cone = UI.slider({ key: 'light.cone', min: 1, max: 180, step: 0.5, unit: '°', hard: true, def: 90, onInput: function (v) { lset({ cone: v }); }, onChange: function (v) { lset({ cone: v }, true); } });
+    M.feather = UI.slider({ key: 'light.feather', min: 0, max: 100, step: 1, unit: '%', hard: true, def: 50, onInput: function (v) { lset({ feather: v }); }, onChange: function (v) { lset({ feather: v }, true); } });
+    M.falloff = UI.select({ key: 'light.falloff', options: ['none', 'smooth', 'inverse'].map(function (v) { return { v: v, label: t('falloff.' + v) }; }), onChange: function (v) { lset({ falloff: v }, true); vis(); } });
+    M.radius = UI.slider({ key: 'light.radius', min: 0, max: 3000, step: 1, unit: 'px', floor: 0, onInput: function (v) { lset({ radius: v }); }, onChange: function (v) { lset({ radius: v }, true); } });
+    M.fdist = UI.slider({ key: 'light.falloffDist', min: 0, max: 5000, step: 1, unit: 'px', floor: 0, onInput: function (v) { lset({ falloffDist: v }); }, onChange: function (v) { lset({ falloffDist: v }, true); } });
+    M.shadows = UI.toggle({ key: 'light.shadows', onChange: function (v) { lset({ shadows: v }, true); vis(); } });
+    M.sdark = UI.slider({ key: 'light.shadowDark', min: 0, max: 100, step: 1, unit: '%', hard: true, onInput: function (v) { lset({ shadowDark: v }); }, onChange: function (v) { lset({ shadowDark: v }, true); } });
+    M.sdiff = UI.slider({ key: 'light.shadowDiff', min: 0, max: 300, step: 1, unit: 'px', floor: 0, onInput: function (v) { lset({ shadowDiff: v }); }, onChange: function (v) { lset({ shadowDiff: v }, true); } });
+    M.aim = UI.seg({ key: 'light.aim', value: 'target', options: ['target', 'free'].map(function (v) { return { v: v, label: t('aim.' + v) }; }), onChange: function (v) { lset({ autoOrient: v }, true); vis(); } });
+    M.pos = UI.vec({ key: 'tf.position', step: 1, onInput: function (v) { lset({ position: v }); }, onChange: function (v) { lset({ position: v }, true); } });
+    M.poi = UI.vec({ key: 'light.poi', step: 1, onInput: function (v) { lset({ poi: v }); }, onChange: function (v) { lset({ poi: v }, true); } });
+    M.ori = UI.vec({ key: 'tf.orientation', step: 0.1, onInput: function (v) { lset({ orientation: v }); }, onChange: function (v) { lset({ orientation: v }, true); } });
+    M.type.label.textContent = t('bg.type');
+    [M.type, M.on, M.color, M.int, M.cone, M.feather, M.falloff, M.radius, M.fdist, M.shadows, M.sdark, M.sdiff, M.aim, M.pos, M.poi, M.ori].forEach(function (x) { props.body.appendChild(x); });
+    var del = el('div', 'btns');
+    del.appendChild(UI.button('act.delete', { small: true, danger: true, icon: 'trash', onClick: function () {
+      if (!S.light) return;
+      return UI.confirm(t('confirm.delete', { n: 1 }), true).then(function (ok) { if (ok) return run('scene.remove', { refs: [S.light] }).then(function () { S.light = null; M.refresh(); S.listHash = ''; poll(true); }); });
+    } }));
+    props.body.appendChild(del);
+
+    function cur() { return (M.data || []).filter(function (l) { return l.ref === S.light; })[0]; }
+    function vis() {
+      var l = cur();
+      props.style.display = l ? '' : 'none';
+      if (!l) return;
+      var ty = M.type.get(), amb = ty === 'ambient', spot = ty === 'spot';
+      [M.cone, M.feather].forEach(function (x) { x.style.display = spot ? '' : 'none'; });
+      [M.falloff].forEach(function (x) { x.style.display = (ty === 'point' || spot) && l.falloff !== undefined ? '' : 'none'; });
+      var fo = M.falloff.get() !== 'none' && (ty === 'point' || spot);
+      M.radius.style.display = fo && l.radius !== undefined ? '' : 'none';
+      M.fdist.style.display = fo && l.falloffDist !== undefined ? '' : 'none';
+      M.shadows.style.display = amb ? 'none' : '';
+      [M.sdark, M.sdiff].forEach(function (x) { x.style.display = !amb && M.shadows.get() ? '' : 'none'; });
+      M.pos.style.display = amb ? 'none' : '';
+      M.aim.style.display = amb || ty === 'point' ? 'none' : '';
+      M.poi.style.display = !amb && ty !== 'point' && M.aim.get() === 'target' ? '' : 'none';
+      M.ori.style.display = !amb && ty !== 'point' && M.aim.get() === 'free' ? '' : 'none';
+    }
+    M.render = function () {
+      list.innerHTML = '';
+      var data = M.data || [];
+      if (!data.length) { list.appendChild(el('div', 'empty', t('light.none'))); }
+      var ic = { point: 'bulb', spot: 'spot', parallel: 'sun', ambient: 'environment', environment: 'environment' };
+      data.forEach(function (l) {
+        var row = el('div', 'oitem' + (l.ref === S.light ? ' sel active' : '') + (l.enabled ? '' : ' off'));
+        row.innerHTML = '<span class="ic-role">' + icon(ic[l.type] || 'bulb', 14) + '</span>';
+        var nm = el('span', 'oname'); nm.textContent = l.name; row.appendChild(nm);
+        row.appendChild(el('span', 'orole', t('light.' + l.type)));
+        row.appendChild(UI.iconBtn(l.enabled ? 'eye' : 'eyeOff', t('act.hide'), function () { quiet('lights.set', { ref: l.ref, values: { enabled: !l.enabled } }).then(M.refresh); }));
+        row.onclick = function () { S.light = l.ref; M.render(); fillProps(); };
+        list.appendChild(row);
+      });
+      if (!cur() && data.length && data[0].type !== 'environment') { S.light = data[0].ref; }
+      fillProps();
+    };
+    function fillProps() {
+      var l = cur();
+      if (l && l.type === 'environment') { props.style.display = 'none'; return; }
+      if (!l) { vis(); return; }
+      M.type.set(l.type); M.on.set(l.enabled); if (l.color) M.color.set(l.color); M.int.set(l.intensity);
+      if (l.cone !== undefined) M.cone.set(l.cone); if (l.feather !== undefined) M.feather.set(l.feather);
+      if (l.falloff) M.falloff.set(l.falloff); if (l.radius !== undefined) M.radius.set(l.radius); if (l.falloffDist !== undefined) M.fdist.set(l.falloffDist);
+      M.shadows.set(!!l.shadows); if (l.shadowDark !== undefined) M.sdark.set(l.shadowDark); if (l.shadowDiff !== undefined) M.sdiff.set(l.shadowDiff);
+      M.aim.set(l.autoOrient || 'target'); if (l.position) M.pos.set(l.position); if (l.poi) M.poi.set(l.poi); if (l.orientation) M.ori.set(l.orientation);
+      vis();
+    }
+    M.refresh = function () {
+      if (!S.comp) { M.data = []; M.render(); return; }
+      if (dragging()) return;
+      Host.call('lights.list', {}).then(function (l) { M.data = l || []; M.render(); }).catch(function () {});
+    };
+  }
+
+  /* ====================== CAMERA ====================== */
+  function buildCamera(pane) {
+    var M = R.camera = {};
+    var box = el('div'); pane.appendChild(box);
+    var cs = UI.section('camera', 'sec.camera'); pane.appendChild(cs);
+    var ls = UI.section('lens', 'sec.lens'); pane.appendChild(ls);
+    var ds = UI.section('dof', 'sec.dof'); pane.appendChild(ds);
+    var fs = UI.section('framing', 'sec.framing'); pane.appendChild(fs);
+    function cset(values, final) {
+      markDrag();
+      live('cam', 'camera.set', { values: values }, final);
+      if (S.snapshot && S.snapshot.camera) { Object.assign(S.snapshot.camera, values); if (values.focal && S.comp) S.snapshot.camera.zoom = values.focal * S.comp.w / 36; Viewport.patchCamera(S.snapshot.camera); }
+    }
+    M.mode = UI.seg({ key: 'cam.mode', value: 'target', options: ['target', 'free'].map(function (v) { return { v: v, label: t('aim.' + v) }; }), onChange: function (v) { cset({ autoOrient: v }, true); vis(); } });
+    M.pos = UI.vec({ key: 'tf.position', step: 1, onInput: function (v) { cset({ position: v }); }, onChange: function (v) { cset({ position: v }, true); } });
+    M.poi = UI.vec({ key: 'light.poi', step: 1, onInput: function (v) { cset({ poi: v }); }, onChange: function (v) { cset({ poi: v }, true); } });
+    M.ori = UI.vec({ key: 'tf.orientation', step: 0.1, onInput: function (v) { cset({ orientation: v }); }, onChange: function (v) { cset({ orientation: v }, true); } });
+    M.rz = UI.slider({ key: 'tf.rz', min: -180, max: 180, step: 0.1, unit: '°', def: 0, onInput: function (v) { cset({ rz: v }); }, onChange: function (v) { cset({ rz: v }, true); } });
+    [M.mode, M.pos, M.poi, M.ori, M.rz].forEach(function (x) { cs.body.appendChild(x); });
+    var cb = el('div', 'btns');
+    cb.appendChild(UI.button('vp.toCam', { small: true, icon: 'camera', onClick: function () { return applyViewToCamera(false); } }));
+    cs.body.appendChild(cb);
+
+    var chips = el('div', 'seg');
+    Presets.lenses.forEach(function (mm) {
+      var b = el('button', 'seg-b', mm + ''); b.type = 'button';
+      b.onclick = function () { M.focal.set(mm); cset({ focal: mm }, true); setTimeout(M.refresh, 250); };
+      chips.appendChild(b);
+    });
+    ls.body.appendChild(chips);
+    M.focal = UI.slider({ key: 'cam.focal', min: 8, max: 300, step: 0.5, unit: 'mm', floor: 1, def: 50, onInput: function (v) { cset({ focal: v }); }, onChange: function (v) { cset({ focal: v }, true); setTimeout(M.refresh, 250); } });
+    M.fov = UI.slider({ key: 'cam.fov', min: 5, max: 150, step: 0.1, unit: '°', hard: true, onInput: function (v) { cset({ fov: v }); }, onChange: function (v) { cset({ fov: v }, true); setTimeout(M.refresh, 250); } });
+    M.zoom = UI.slider({ key: 'cam.zoom', min: 100, max: 10000, step: 1, unit: 'px', floor: 1, onInput: function (v) { cset({ zoom: v }); }, onChange: function (v) { cset({ zoom: v }, true); setTimeout(M.refresh, 250); } });
+    [M.focal, M.fov, M.zoom].forEach(function (x) { ls.body.appendChild(x); });
+
+    M.dof = UI.toggle({ key: 'cam.dof', onChange: function (v) { cset({ dof: v }, true); vis(); } });
+    M.focus = UI.slider({ key: 'cam.focus', min: 0, max: 10000, step: 1, unit: 'px', floor: 0, onInput: function (v) { cset({ focus: v }); }, onChange: function (v) { cset({ focus: v }, true); } });
+    M.ap = UI.slider({ key: 'cam.aperture', min: 0, max: 500, step: 0.5, unit: 'px', floor: 0, onInput: function (v) { cset({ aperture: v }); }, onChange: function (v) { cset({ aperture: v }, true); } });
+    M.blur = UI.slider({ key: 'cam.blur', min: 0, max: 500, step: 1, unit: '%', floor: 0, def: 100, onInput: function (v) { cset({ blur: v }); }, onChange: function (v) { cset({ blur: v }, true); } });
+    [M.dof, M.focus, M.ap, M.blur].forEach(function (x) { ds.body.appendChild(x); });
+    var fb = el('div', 'btns');
+    fb.appendChild(UI.button('cam.focusOn', { small: true, icon: 'target', onClick: function () { var it = needObj(); if (it) return run('camera.focusOn', { ref: it.ref }, t('ok.updated')).then(fill); } }));
+    ds.body.appendChild(fb);
+
+    var grid = el('div', 'grid');
+    Presets.camera.concat(userPresets('camera')).forEach(function (p) {
+      var c = el('button', 'card', icon('camera', 18) + '<span></span>'); c.type = 'button';
+      c.lastChild.textContent = p.name || t(p.key);
+      c.onclick = function () { applyFraming(p.data || p); };
+      grid.appendChild(c);
+    });
+    fs.body.appendChild(grid);
+
+    function vis() {
+      var free = M.mode.get() === 'free';
+      M.poi.style.display = free ? 'none' : '';
+      M.ori.style.display = free ? '' : 'none';
+      [M.focus, M.ap, M.blur].forEach(function (x) { x.style.display = M.dof.get() ? '' : 'none'; });
+    }
+    function fill(c) {
+      box.innerHTML = '';
+      var has = !!c;
+      [cs, ls, ds].forEach(function (s) { s.style.display = has ? '' : 'none'; });
+      if (!has) {
+        if (!S.comp) { box.appendChild(UI.note(t('scene.nocomp'), 'warn')); fs.style.display = 'none'; return; }
+        box.appendChild(UI.note(t('cam.none')));
+        var b = el('div', 'btns'); b.style.marginBottom = '8px';
+        b.appendChild(UI.button('cam.create', { primary: true, icon: 'camera', onClick: function () { return run('camera.ensure', {}, t('ok.created')).then(function (r) { fill(r); S.listHash = ''; poll(true); }); } }));
+        box.appendChild(b);
+        fs.style.display = '';
+        return;
+      }
+      fs.style.display = '';
+      M.mode.set(c.autoOrient || 'target'); M.pos.set(c.position); if (c.poi) M.poi.set(c.poi); if (c.orientation) M.ori.set(c.orientation); M.rz.set(c.rz || 0);
+      M.focal.set(c.focal); M.fov.set(c.fov); M.zoom.set(c.zoom);
+      M.dof.set(c.dof); M.focus.set(c.focus); M.ap.set(c.aperture); M.blur.set(c.blur);
+      vis();
+    }
+    M.refresh = function () { if (dragging()) return; Host.call('camera.get', {}).then(fill).catch(function () {}); };
+  }
+
+  function applyFraming(p) {
+    if (!S.comp) { UI.toast(t('err.NO_COMP'), 'warn'); return; }
+    var it = activeItem();
+    var center = Promise.resolve([S.comp.w / 2, S.comp.h / 2, 0]);
+    if (isObj(it)) center = Host.call('scene.getTransform', { ref: it.ref }).then(function (tf) { return tf.position; });
+    return center.then(function (c) {
+      return Host.call('camera.ensure', {}).then(function () {
+        var off = p.offset || [0, 0, -1800];
+        var v = { autoOrient: 'target', position: [c[0] + off[0], c[1] + off[1], c[2] + off[2]], poi: c, focal: p.focal || 50, rz: p.rz || 0 };
+        if (p.dof !== undefined) v.dof = p.dof;
+        return run('camera.set', { values: v }, t('ok.updated'));
+      });
+    }).then(function () { if (R.camera) R.camera.refresh(); refreshSnapshot(); if (Viewport.ready) { Viewport.setView('camera'); if (R.vp) R.vp.view.set('camera'); } }).catch(function () {});
+  }
+
+  /* ====================== ANIMATION ====================== */
+  var CUSTOM_PROPS = ['position', 'rx', 'ry', 'rz', 'scale', 'opacity', 'depth', 'bevel', 'metal', 'reflection', 'FrontColor', 'SideColor', 'BevelColor'];
+  function buildAnim(pane) {
+    var M = R.anim = {}, A = S.anim;
+    var ts = UI.section('animTiming', 'sec.animTiming'); pane.appendChild(ts);
+    M.target = UI.seg({ key: 'anim.targets', value: A.target, options: [{ v: 'active', label: t('anim.active') }, { v: 'selected', label: t('anim.selected') }], onChange: function (v) { A.target = v; } });
+    var startRow = el('div', 'slider');
+    var startIn = el('input', 'num'); startIn.style.width = '70px'; startIn.value = '0';
+    startRow.appendChild(startIn);
+    var nowB = UI.button('anim.now', { small: true, onClick: function () { return Host.call('caps.comp', {}).then(function () { return Host.call('scene.snapshot', {}); }).then(function (s) { startIn.value = (s && s.time !== undefined ? s.time : 0).toFixed(2); }).catch(function () {}); } });
+    startRow.appendChild(nowB);
+    M.start = UI.row('anim.start', startRow);
+    M.dur = UI.slider({ key: 'anim.duration', min: 0.1, max: 10, step: 0.05, unit: 's', floor: 0.04, value: A.duration, def: 1.5, onChange: function (v) { A.duration = v; } });
+    M.ease = UI.select({ key: 'anim.ease', value: A.ease, options: ['linear', 'ease', 'easeIn', 'easeOut', 'strong', 'overshoot', 'bounce'].map(function (v) { return { v: v, label: t('ease.' + v) }; }), onChange: function (v) { A.ease = v; } });
+    M.speed = UI.slider({ key: 'anim.speed', min: 0.25, max: 4, step: 0.05, unit: '×', hard: true, value: A.speed, def: 1, onChange: function (v) { A.speed = v; } });
+    M.amount = UI.slider({ key: 'anim.amount', min: 0.1, max: 3, step: 0.05, unit: '×', hard: true, value: A.amount, def: 1, onChange: function (v) { A.amount = v; } });
+    M.stagger = UI.slider({ key: 'anim.stagger', min: 0, max: 1, step: 0.01, unit: 's', hard: true, value: A.stagger, def: 0.08, onChange: function (v) { A.stagger = v; } });
+    M.replace = UI.toggle({ key: 'anim.replace', value: A.replace, onChange: function (v) { A.replace = v; } });
+    M.color = UI.color({ key: 'anim.colorFrom', value: A.color, onChange: function (c) { A.color = c; } });
+    [M.target, M.start, M.dur, M.ease, M.speed, M.amount, M.stagger, M.replace, M.color].forEach(function (x) { ts.body.appendChild(x); });
+
+    var ps = UI.section('animPresets', 'sec.animPresets'); pane.appendChild(ps);
+    var grid = el('div', 'grid');
+    var apIcon = { reveal3d: 'cube', entrance: 'move', popUp: 'plus', scaleReveal: 'frame', spin3d: 'refresh', smoothRotation: 'reset', floating: 'environment', cinematic: 'camera', extrudeGrow: 'scene', bevelGrow: 'target', colorShift: 'materials' };
+    Presets.animation.forEach(function (id) {
+      var c = el('button', 'card', icon(apIcon[id] || 'play', 18) + '<span>' + t('ap.' + id) + '</span>'); c.type = 'button';
+      c.onclick = function () { applyAnimPreset(id, readTiming()); };
+      grid.appendChild(c);
+    });
+    userPresets('animation').forEach(function (p) {
+      var c = el('button', 'card', icon('play', 18) + '<span></span>'); c.type = 'button';
+      c.lastChild.textContent = p.name;
+      c.onclick = function () { applyAnimPreset(p.data.preset, Object.assign(readTiming(), p.data)); };
+      grid.appendChild(c);
+    });
+    ps.body.appendChild(grid);
+    var cl = el('div', 'btns');
+    cl.appendChild(UI.button('anim.clear', { small: true, danger: true, icon: 'trash', onClick: function () { var it = needObj(); if (it) return run('anim.clear', { ref: it.ref }, t('ok.updated')).then(refreshSnapshot); } }));
+    ps.body.appendChild(cl);
+
+    function readTiming() {
+      var st = parseFloat(startIn.value);
+      return { start: isNaN(st) ? null : st, duration: M.dur.get(), ease: M.ease.get(), speed: M.speed.get(), amount: M.amount.get(), stagger: M.stagger.get(), replace: M.replace.get(), color: M.color.get(), target: M.target.get() };
+    }
+    M.readTiming = readTiming;
+
+    // custom
+    var cs = UI.section('animCustom', 'sec.animCustom'); pane.appendChild(cs);
+    var fromIn = el('input', 'txt'), toIn = el('input', 'txt');
+    fromIn.dir = toIn.dir = 'ltr';
+    M.prop = UI.select({ key: 'anim.prop', options: CUSTOM_PROPS.map(function (p) { return { v: p, label: t('prop.' + p) }; }), value: 'ry', onChange: function () { fromIn.value = ''; toIn.value = ''; fillCur(toIn); } });
+    function curBtn(inp) { return UI.iconBtn('target', t('anim.useCur'), function () { fillCur(inp); }); }
+    function fillCur(inp) {
+      var it = needObj(); if (!it) return;
+      Host.call('anim.current', { ref: it.ref, target: M.prop.get() }).then(function (v) {
+        if (/Color$/.test(M.prop.get()) && v) inp.value = UI.toHex(v);
+        else inp.value = Array.isArray(v) ? v.map(function (x) { return Math.round(x * 100) / 100; }).join(', ') : Math.round(v * 100) / 100;
+      }).catch(App.error);
+    }
+    var fr = el('div', 'color'); fr.appendChild(fromIn); fr.appendChild(curBtn(fromIn));
+    var tr = el('div', 'color'); tr.appendChild(toIn); tr.appendChild(curBtn(toIn));
+    cs.body.appendChild(M.prop); cs.body.appendChild(UI.row('anim.from', fr)); cs.body.appendChild(UI.row('anim.to', tr));
+    function parseVal(s) {
+      s = String(s || '').trim();
+      if (!s) return null;
+      if (/^#?[0-9a-f]{6}$/i.test(s)) return UI.fromHex(s);
+      var parts = s.split(/[,\s]+/).filter(Boolean).map(Number);
+      if (parts.some(isNaN)) return undefined;
+      return parts.length === 1 ? parts[0] : parts;
+    }
+    var cb = el('div', 'btns');
+    cb.appendChild(UI.button('anim.apply', { primary: true, icon: 'play', onClick: function () {
+      var it = needObj(); if (!it) return;
+      var f = parseVal(fromIn.value), to = parseVal(toIn.value);
+      if (f === undefined) { fromIn.classList.add('bad'); return; }
+      if (to === undefined) { toIn.classList.add('bad'); return; }
+      fromIn.classList.remove('bad'); toIn.classList.remove('bad');
+      var tm = readTiming();
+      return run('anim.applyCustom', { ref: it.ref, target: M.prop.get(), from: f, to: to, start: tm.start, duration: tm.duration, ease: tm.ease, speed: tm.speed, replace: tm.replace })
+        .then(function (r) { UI.toast(t('anim.done', { n: r.keys })); refreshSnapshot(); });
+    } }));
+    cs.body.appendChild(cb);
+    M.refresh = function () {};
+  }
+
+  function applyAnimPreset(id, tm) {
+    var it = activeItem();
+    if (!isObj(it)) { UI.toast(t('err.NO_OBJECT'), 'warn'); return; }
+    var refs = tm.target === 'selected' ? selRefs() : [it.ref];
+    S.lastAnim = id;
+    var go = function (start) {
+      return run('anim.applyPreset', { refs: refs, preset: id, start: start, duration: tm.duration, ease: tm.ease, speed: tm.speed, amount: tm.amount, stagger: tm.stagger, replace: tm.replace, color: tm.color })
+        .then(function (r) { UI.toast(t('anim.done', { n: r.keys })); refreshSnapshot(); }).catch(function () {});
+    };
+    if (tm.start === null || tm.start === undefined) return Host.call('scene.snapshot', {}).then(function (s) { return go(s && s.time !== undefined ? s.time : 0); });
+    return go(tm.start);
+  }
+
+  /* ====================== PRESETS LIBRARY ====================== */
+  var CATS = ['geometry', 'material', 'lighting', 'camera', 'environment', 'animation', 'scene'];
+  function userPresets(cat) { return Store.read('presets/' + cat + '.json', []); }
+  function writePresets(cat, list) { Store.write('presets/' + cat + '.json', list); }
+
+  function captureCurrent(cat) {
+    var it = activeItem();
+    switch (cat) {
+      case 'geometry':
+        if (!isObj(it)) return Promise.reject({ code: 'NO_OBJECT' });
+        return Host.call('geometry.get', { ref: it.ref }).then(function (g) { return { values: { depth: g.depth, bevelStyle: g.bevelStyle, bevelDepth: g.bevelDepth, holeBevel: g.holeBevel, origin: g.origin, depthScale: g.depthScale } }; });
+      case 'material':
+        if (!isObj(it)) return Promise.reject({ code: 'NO_OBJECT' });
+        return Host.call('materials.get', { ref: it.ref }).then(function (m) {
+          var layer = {};
+          Object.keys(m.layer || {}).forEach(function (k) { if (m.layer[k] !== null && m.layer[k] !== undefined) layer[k] = m.layer[k]; });
+          return { layer: layer, surfaces: m.surfaces, fill: m.fill };
+        });
+      case 'lighting':
+        return Host.call('lights.list', {}).then(function (ls) {
+          var c = [S.comp.w / 2, S.comp.h / 2, 0];
+          return { lights: ls.filter(function (l) { return l.type !== 'environment'; }).map(function (l) {
+            var o = { name: l.name, type: l.type, intensity: l.intensity, color: l.color, cone: l.cone, feather: l.feather, falloff: l.falloff, radius: l.radius, falloffDist: l.falloffDist, shadows: l.shadows, shadowDark: l.shadowDark, shadowDiff: l.shadowDiff, enabled: l.enabled };
+            if (l.position) o.offset = [l.position[0] - c[0], l.position[1] - c[1], l.position[2] - c[2]];
+            if (l.poi) o.poi = l.poi;
+            return o;
+          }) };
+        });
+      case 'camera':
+        return Host.call('camera.get', {}).then(function (cam) {
+          if (!cam) throw { code: 'NO_CAMERA' };
+          var c = cam.poi || [S.comp.w / 2, S.comp.h / 2, 0];
+          return { offset: [cam.position[0] - c[0], cam.position[1] - c[1], cam.position[2] - c[2]], focal: Math.round(cam.focal * 10) / 10, rz: cam.rz, dof: cam.dof };
+        });
+      case 'environment':
+        return Host.call('environment.get', {}).then(function (e) { if (!e || !e.active) throw { code: 'NO_ENV' }; return { values: { exposure: e.exposure, brightness: e.brightness, contrast: e.contrast, saturation: e.saturation, rotation: e.rotation, file: e.file } }; });
+      case 'animation':
+        // saves the last applied animation preset together with the current timing settings
+        var tm = R.anim.readTiming();
+        if (!S.lastAnim) return Promise.reject({ code: 'PRESET_NA' });
+        return Promise.resolve({ preset: S.lastAnim, duration: tm.duration, ease: tm.ease, speed: tm.speed, amount: tm.amount, stagger: tm.stagger });
+      case 'scene':
+        return Host.call('state.exportScene', {});
+    }
+    return Promise.reject({ code: 'HOST' });
+  }
+
+  function savePreset(cat) {
+    return captureCurrent(cat).then(function (data) {
+      return UI.prompt(t('pre.name'), '').then(function (name) {
+        if (!name || !name.trim()) return;
+        var list = userPresets(cat);
+        var p = { id: 'u' + Date.now().toString(36), name: name.trim(), created: new Date().toISOString(), data: data };
+        if (cat === 'material') { p.layer = data.layer; p.surfaces = data.surfaces; p.fill = data.fill; }
+        if (cat === 'lighting') p.lights = data.lights;
+        list.push(p);
+        writePresets(cat, list);
+        UI.toast(t('pre.saved'));
+        buildPanes();
+      });
+    }).catch(App.error);
+  }
+
+  function applyUserPreset(cat, p) {
+    switch (cat) {
+      case 'geometry': return applyGeometry(p.data.values || p.values);
+      case 'material': return applyMaterial(p);
+      case 'lighting': return run('lights.applyPreset', { lights: p.lights || p.data.lights, replace: true }, t('ok.updated')).then(function () { S.listHash = ''; poll(true); });
+      case 'camera': return applyFraming(p.data || p);
+      case 'environment': return run('environment.set', { values: p.data.values || p.values }, t('ok.updated'));
+      case 'animation': return applyAnimPreset(p.data.preset, Object.assign(R.anim.readTiming(), p.data));
+      case 'scene': return run('state.importScene', { scene: p.data, renderer: canGeo('depth') ? null : bestRenderer() }, t('ok.created')).then(function () { S.listHash = ''; poll(true); refreshActive(); });
+    }
+  }
+
+  function builtinList(cat) {
+    switch (cat) {
+      case 'geometry': return Presets.geometry.map(function (p) { return { name: I18N.lang === 'ar' ? p.ar : p.en, apply: function () { return applyGeometry(p.values); } }; });
+      case 'material': return Presets.material.map(function (p) { return { name: I18N.lang === 'ar' ? p.ar : p.en, apply: function () { return applyMaterial(p); } }; });
+      case 'lighting': return Presets.lighting.map(function (p) { return { name: t(p.key), apply: function () { return run('lights.applyPreset', { lights: p.lights, replace: true }, t('ok.updated')).then(function () { S.listHash = ''; poll(true); }); } }; });
+      case 'camera': return Presets.camera.map(function (p) { return { name: t(p.key), apply: function () { return applyFraming(p); } }; });
+      case 'environment': return Presets.environment.map(function (p) { return { name: I18N.lang === 'ar' ? p.ar : p.en, apply: function () { return run('environment.set', { values: p.values }, t('ok.updated')); } }; });
+      case 'animation': return Presets.animation.map(function (id) { return { name: t('ap.' + id), apply: function () { return applyAnimPreset(id, R.anim.readTiming()); } }; });
+    }
+    return [];
+  }
+
+  function buildPresets(pane) {
+    var M = R.presets = {};
+    var catSel = UI.select({ options: CATS.map(function (c) { return { v: c, label: t('pre.' + c) }; }), value: S.presetCat, onChange: function (v) { S.presetCat = v; M.refresh(); } });
+    var top = el('div', 'objbar'); top.style.cssText = 'margin:-10px -10px 10px;';
+    top.appendChild(catSel.sel);
+    pane.appendChild(top);
+    var acts = el('div', 'btns'); acts.style.margin = '0 0 10px';
+    pane.appendChild(acts);
+    var mine = UI.section('pre_mine', 'pre.mine'); pane.appendChild(mine);
+    var built = UI.section('pre_builtin', 'pre.builtin'); pane.appendChild(built);
+
+    M.refresh = function () {
+      var cat = S.presetCat;
+      acts.innerHTML = '';
+      acts.appendChild(UI.button(cat === 'scene' ? 'pre.sceneSave' : 'pre.save', { primary: true, small: true, icon: 'plus', onClick: function () { return savePreset(cat); } }));
+      acts.appendChild(UI.button('pre.import', { small: true, icon: 'upload', onClick: function () {
+        var f = Dialog.open(['json'], t('pre.import'));
+        if (!f) return;
+        try {
+          var d = Store.readAbs(f), items = d.items || (d.objects ? [{ id: 'u' + Date.now().toString(36), name: f.split(/[\\/]/).pop().replace(/\.json$/i, ''), data: d }] : []);
+          var targetCat = d.cat || cat;
+          var list = userPresets(targetCat), ids = list.map(function (p) { return p.id; });
+          items.forEach(function (p) { if (ids.indexOf(p.id) < 0) list.push(p); });
+          writePresets(targetCat, list);
+          UI.toast(t('pre.imported', { n: items.length }));
+          buildPanes();
+        } catch (e) { App.error({ code: 'BAD_SCENE' }); }
+      } }));
+      acts.appendChild(UI.button('pre.export', { small: true, icon: 'download', onClick: function () {
+        var f = Dialog.save(['json'], t('pre.export'), 'tilago3d-' + cat + '.json');
+        if (!f) return;
+        if (!/\.json$/i.test(f)) f += '.json';
+        Store.writeAbs(f, { type: 'tilago3d-presets', version: 1, cat: cat, items: userPresets(cat) });
+        UI.toast(t('pre.exported'));
+      } }));
+
+      mine.body.innerHTML = '';
+      var list = userPresets(cat);
+      var pl = el('div', 'plist');
+      if (!list.length) pl.appendChild(el('div', 'empty', t('pre.empty')));
+      list.forEach(function (p, i) {
+        var row = el('div', 'pitem');
+        var nm = el('span', 'pname'); nm.textContent = p.name; row.appendChild(nm);
+        row.appendChild(UI.button('pre.load', { small: true, icon: 'play', onClick: function () { return applyUserPreset(cat, p); } }));
+        row.appendChild(UI.iconBtn('edit', t('pre.rename'), function () {
+          UI.prompt(t('pre.name'), p.name).then(function (n) { if (n && n.trim()) { list[i].name = n.trim(); writePresets(cat, list); M.refresh(); } });
+        }));
+        row.appendChild(UI.iconBtn('download', t('pre.export'), function () {
+          var f = Dialog.save(['json'], t('pre.export'), p.name + '.json');
+          if (!f) return;
+          if (!/\.json$/i.test(f)) f += '.json';
+          Store.writeAbs(f, { type: 'tilago3d-presets', version: 1, cat: cat, items: [p] });
+          UI.toast(t('pre.exported'));
+        }));
+        row.appendChild(UI.iconBtn('trash', t('pre.delete'), function () {
+          UI.confirm(t('pre.confirmDelete', { n: p.name }), true).then(function (ok) { if (ok) { list.splice(i, 1); writePresets(cat, list); buildPanes(); } });
+        }));
+        pl.appendChild(row);
+      });
+      mine.body.appendChild(pl);
+
+      built.body.innerHTML = '';
+      var bl = builtinList(cat);
+      built.style.display = bl.length ? '' : 'none';
+      var bp = el('div', 'plist');
+      bl.forEach(function (p) {
+        var row = el('div', 'pitem');
+        var nm = el('span', 'pname'); nm.textContent = p.name; row.appendChild(nm);
+        row.appendChild(el('span', 'ptag', t('pre.builtin')));
+        row.appendChild(UI.button('pre.load', { small: true, icon: 'play', onClick: p.apply }));
+        bp.appendChild(row);
+      });
+      built.body.appendChild(bp);
+    };
+    M.refresh();
+  }
+
+  /* ====================== SETTINGS ====================== */
+  function buildSettings(pane) {
+    var M = R.settings = {};
+    var gs = UI.section('general', 'sec.general'); pane.appendChild(gs);
+    gs.body.appendChild(UI.seg({ key: 'set.lang', value: I18N.lang, options: [{ v: 'ar', label: 'العربية' }, { v: 'en', label: 'English' }], onChange: function (v) { I18N.set(v); rebuild(); } }));
+    gs.body.appendChild(UI.toggle({ key: 'set.live', value: S.settings.live, onChange: function (v) { S.settings.live = v; saveSettings(); } }));
+    gs.body.appendChild(UI.toggle({ key: 'set.sync', value: S.settings.sync, onChange: function (v) { S.settings.sync = v; saveSettings(); } }));
+    gs.body.appendChild(UI.seg({ key: 'set.quality', value: S.settings.quality, options: ['low', 'mid', 'high'].map(function (q) { return { v: q, label: t('q.' + q) }; }),
+      onChange: function (v) { S.settings.quality = v; saveSettings(); Viewport.setQuality(v); refreshSnapshot(); } }));
+
+    var en = UI.section('engine', 'sec.engine'); pane.appendChild(en);
+    var hasE3D = !!(S.info && S.info.e3d);
+    var modeSeg = UI.seg({ key: 'set.mode', value: S.mode, options: [{ v: 'native', label: t('mode.native') }, { v: 'e3d', label: t('mode.e3d') + (hasE3D ? '' : ' ✕') }],
+      onChange: function (v) {
+        if (v === 'e3d' && !hasE3D) { modeSeg.set('native'); UI.toast(t('e3d.missing'), 'warn'); return; }
+        S.mode = v; saveSettings(); updateChips(); refreshActive();
+      } });
+    en.body.appendChild(modeSeg);
+    M.rend = UI.select({ key: 'set.renderer', options: [], onChange: function (v) {
+      run('caps.setRenderer', { renderer: v }, t('ok.updated')).then(function (c) { S.comp = c; updateChips(); refreshActive(); refreshSnapshot(); }).catch(function () {});
+    } });
+    en.body.appendChild(M.rend);
+
+    var cs = UI.section('caps', 'sec.caps'); pane.appendChild(cs);
+    M.capsBox = el('div'); cs.body.appendChild(M.capsBox);
+    var cb = el('div', 'btns');
+    cb.appendChild(UI.button('set.reprobe', { small: true, icon: 'refresh', onClick: function () {
+      status(t('caps.probing'));
+      return run('caps.probe', {}).then(function (p) { Store.write('cache/caps.json', p); S.caps = p; buildPanes(); updateChips(); status(); });
+    } }));
+    cs.body.appendChild(cb);
+
+    var ds = UI.section('diag', 'sec.diag', { closed: true }); pane.appendChild(ds);
+    var db = el('div', 'btns');
+    db.appendChild(UI.button('set.dump', { small: true, icon: 'copy', onClick: function () {
+      var it = activeItem(); if (!it) { UI.toast(t('err.NO_OBJECT'), 'warn'); return; }
+      return run('caps.dump', { ref: it.ref }).then(function (txt) {
+        var ta = el('textarea'); ta.value = txt; document.body.appendChild(ta); ta.select();
+        try { document.execCommand('copy'); UI.toast(t('ok.copied')); } catch (e) {}
+        ta.remove();
+      });
+    } }));
+    db.appendChild(UI.button('upd.check', { small: true, icon: 'refresh', onClick: function () {
+      if (!window.Updater || !Updater.check) return;
+      return Updater.check(true).then(function (r) { if (r && !r.updated) UI.toast(t('upd.latest', { v: r.version || '' })); }).catch(function (e) { UI.toast(t('upd.fail', { e: e.message }), 'err'); });
+    } }));
+    db.appendChild(UI.button('set.openData', { small: true, icon: 'folder', onClick: function () { Store.openDir(); } }));
+    ds.body.appendChild(db);
+    var ver = el('p', 'note'); ver.textContent = 'Tilago 3D Studio ' + ((window.Updater && Updater.version) || '1.0.0') + (S.info ? ' · After Effects ' + S.info.version : '');
+    ds.body.appendChild(ver);
+
+    M.refresh = function () {
+      var rs = (S.comp && S.comp.renderers) || [];
+      M.rend.fill(rs.map(function (r) {
+        var c = S.caps && S.caps.renderers[r];
+        return { v: r, label: (c ? c.name : r) + (c && c.geo.depth ? '  ·  Extrude' : '') };
+      }), S.comp ? S.comp.renderer : '');
+      M.rend.style.display = S.comp ? '' : 'none';
+      M.capsBox.innerHTML = '';
+      var tb = el('table', 'caps');
+      function line(label, ok, txt) {
+        var tr = el('tr');
+        var a = el('td'); a.textContent = label;
+        var b = el('td', ok ? 'yes' : 'no'); b.textContent = txt || t(ok ? 'caps.yes' : 'caps.no');
+        tr.appendChild(a); tr.appendChild(b); tb.appendChild(tr);
+      }
+      if (S.info) {
+        line(t('caps.ae'), true, S.info.version);
+        line(t('caps.e3d'), !!S.info.e3d, t(S.info.e3d ? 'caps.installed' : 'caps.missing'));
+        line(t('caps.fonts'), true, t(S.info.fontsApi ? 'caps.fromAE' : 'caps.fromPanel'));
+        line(t('caps.envLight'), !!S.info.envLight);
+        line(t('caps.rtl'), !!S.info.paragraphDirection);
+      }
+      var r = capsR();
+      if (r) {
+        ['depth', 'bevelStyle', 'bevelDepth', 'holeBevel'].forEach(function (k) { line(r.name + ' · ' + t(k === 'depth' ? 'geo.depth' : (k === 'bevelStyle' ? 'geo.bevelStyle' : (k === 'bevelDepth' ? 'geo.bevelDepth' : 'geo.holeBevel'))), !!r.geo[k]); });
+        MAT_SLIDERS.forEach(function (d) { line(r.name + ' · ' + t('mat.' + d[0]), !!r.mat[d[0]]); });
+        line(r.name + ' · ' + t('surf.Front') + ' / ' + t('surf.Side') + ' / ' + t('surf.Bevel'), canSurf('Front', 'color') && canSurf('Side', 'color'));
+      }
+      M.capsBox.appendChild(tb);
+      M.capsBox.appendChild(UI.note(t('caps.never')));
+      M.capsBox.appendChild(UI.note(t('caps.e3dManual')));
+    };
+    M.refresh();
+  }
+
+  document.addEventListener('DOMContentLoaded', start);
+})();

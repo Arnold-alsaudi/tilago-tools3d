@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tilago 3D Studio</title>
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+  <header class="hdr">
+    <div class="brand">
+      <div class="brand-mark" id="brandMark"></div>
+      <div class="brand-name">Tilago 3D <small>Studio</small></div>
+    </div>
+    <div class="hdr-sp"></div>
+    <span class="chip" id="chipMode"><span class="dot"></span><span></span></span>
+    <span class="chip" id="chipRenderer"><span class="dot"></span><span></span></span>
+    <button class="lang-btn" id="langBtn" type="button">EN</button>
+  </header>
+  <nav class="tabs" id="tabs" role="tablist"></nav>
+  <div class="objbar" id="objbar"></div>
+  <div class="vp-wrap" id="vpWrap">
+    <div id="vp"></div>
+    <div class="vp-frame" id="vpFrame"></div>
+    <div class="vp-bar" id="vpBar"></div>
+    <div class="vp-msg" id="vpMsg"></div>
+    <div class="vp-badge" id="vpBadge"></div>
+    <div class="vp-resize" id="vpResize"></div>
+    <button class="vp-toggle" id="vpToggle" type="button"></button>
+  </div>
+  <main id="main"></main>
+  <footer class="status" id="status"><span class="spin"></span><span class="msg"></span><span id="stComp"></span></footer>
+
+  <script src="js/lib/three.min.js"></script>
+  <script>
+    // CEP mixed-context defines CommonJS globals, so the UMD build may export into them instead of window.
+    if (!window.THREE) {
+      if (typeof module === 'object' && module.exports && module.exports.WebGLRenderer) window.THREE = module.exports;
+      else if (typeof exports === 'object' && exports.WebGLRenderer) window.THREE = exports;
+    }
+  </script>
+  <script src="js/lib/OrbitControls.js"></script>
+  <script src="js/i18n.js"></script>
+  <script src="js/ui.js"></script>
+  <script src="js/presets.js"></script>
+  <script src="js/bridge.js"></script>
+  <script src="js/viewport.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>

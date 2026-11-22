@@ -4,7 +4,7 @@
 $.global.TS3D_LOAD_ERR = '';
 $.global.TS3D_ROOT = File($.fileName).parent.fsName;
 $.global.TS3D_load = function () {
-  var files = ['core', 'caps', 'text', 'materials', 'scene', 'lights', 'background', 'anim', 'e3d', 'state', 'logo'];
+  var files = ['core', 'caps', 'text', 'materials', 'scene', 'lights', 'background', 'anim', 'e3d', 'state', 'logo', 'brand'];
   var i, f;
   $.global.TS3D_LOAD_ERR = '';
   for (i = 0; i < files.length; i++) {

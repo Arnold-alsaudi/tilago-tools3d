@@ -277,6 +277,13 @@
           case 'background.get': return null;
           case 'environment.get': return { mode: 'layer', active: false };
           case 'e3d.list': return [];
+          case 'brand.scan': return { comps: 6, links: [{ e3d: '5:1', kind: 'extrude' }, { e3d: '5:1', kind: 'extrude' }],
+            logos: [{ key: '5:3', comp: 'Element 3D Logo', layer: 'Logo Masks', kind: 'masks', e3d: ['E3D extrude'], likely: true, box: [700, 380, 520, 320],
+                      preview: [[[700, 380], [1220, 380], [1220, 700], [700, 700]], [[860, 470], [1060, 470], [960, 620]]] },
+                    { key: '7:2', comp: 'Place Your Logo', layer: 'logo.png', kind: 'image', e3d: [], likely: true, file: 'img/emblem.png', w: 296, h: 160 }],
+            texts: [{ key: '5:2', comp: 'Element 3D Logo', layer: 'Title', text: 'YOUR TITLE', e3d: ['E3D extrude'], likely: true },
+                    { key: '9:1', comp: 'Final', layer: 'Slogan', text: 'Your slogan here', e3d: [], likely: true }] };
+          case 'brand.apply': return { logos: (a.logos || []).length, texts: (a.texts || []).length, skipped: [] };
         }
         return null;
       })();

@@ -119,6 +119,7 @@
         S.draft.ps = st ? (st.filter(function (s) { return /bold/i.test(s.style); })[0] || st[0]).ps : null;
       }
       if (R.main) R.main.fontsReady();
+      if (R.brand && R.brand.fontsReady) R.brand.fontsReady();
     }).catch(App.error);
   }
 
@@ -199,7 +200,7 @@
 
   /* ---------- tabs ---------- */
   // Five tabs; library + settings live behind the gear in the header.
-  var TABS = [['main', 'text'], ['materials', 'materials'], ['scene', 'scene'], ['lighting', 'lighting'], ['animation', 'animation']];
+  var TABS = [['main', 'text'], ['brand', 'logo'], ['materials', 'materials'], ['scene', 'scene'], ['lighting', 'lighting'], ['animation', 'animation']];
   function buildTabs() {
     var gear = $('#setBtn');
     gear.innerHTML = icon('settings', 15) + '<span>' + t('tab.settings') + '</span>';
@@ -331,8 +332,8 @@
     main.innerHTML = '';
     Array.prototype.forEach.call(document.querySelectorAll('body > .font-list'), function (n) { n.remove(); });
     R = { vp: R.vp };
-    if (['main', 'materials', 'scene', 'lighting', 'animation', 'settings'].indexOf(S.tab) < 0) S.tab = 'main';
-    [['main', [buildMain]], ['materials', [buildMaterials]], ['scene', [buildScene, buildCamera]], ['lighting', [buildLights, buildEnv]],
+    if (['main', 'brand', 'materials', 'scene', 'lighting', 'animation', 'settings'].indexOf(S.tab) < 0) S.tab = 'main';
+    [['main', [buildMain]], ['brand', [buildBrand]], ['materials', [buildMaterials]], ['scene', [buildScene, buildCamera]], ['lighting', [buildLights, buildEnv]],
      ['animation', [buildAnim]], ['settings', [buildPresets, buildSettings]]].forEach(function (p) {
       var pane = el('div', 'pane' + (S.tab === p[0] ? ' on' : ''));
       pane.id = 'pane-' + p[0];
@@ -793,6 +794,219 @@
         });
       });
     }).catch(App.error);
+  }
+
+  /* ====================== REBRAND (templates, Element 3D aware) ====================== */
+  function buildBrand(pane) {
+    var B = R.brand = { scan: null, logo: null, S: null, polys: null, vec: null };
+    var O = { channel: 'auto', threshold: 0.5, smooth: 1, minArea: 40, corner: 55, invert: false };
+    pane.appendChild(UI.note(t('br.intro')));
+
+    // 1. scan
+    var s1 = UI.section('br_scan', 'br.s1'); pane.appendChild(s1);
+    var sum = el('div', 'br-sum');
+    var scanBtn = UI.button('br.scan', { primary: true, icon: 'refresh', onClick: doScan });
+    s1.body.appendChild(scanBtn); s1.body.appendChild(sum);
+
+    // 2. new logo
+    var s2 = UI.section('br_logo', 'br.s2'); pane.appendChild(s2);
+    var lb = el('div', 'btns full');
+    lb.appendChild(UI.button('logo.file', { icon: 'upload', onClick: pickLogo }));
+    s2.body.appendChild(lb);
+    var linfo = el('div', 'logo-info'); s2.body.appendChild(linfo);
+    var cv = el('canvas', 'trace-cv'); cv.style.display = 'none'; s2.body.appendChild(cv);
+    var topt = el('div'); topt.style.display = 'none'; s2.body.appendChild(topt);
+    topt.appendChild(UI.note(t('br.traceWhy')));
+    topt.appendChild(UI.slider({ key: 'trace.threshold', min: 1, max: 99, step: 1, unit: '%', hard: true, value: 50, def: 50, onInput: function (v) { O.threshold = v / 100; retrace(); } }));
+    topt.appendChild(UI.slider({ key: 'trace.smooth', min: 0, max: 6, step: 0.1, unit: 'px', hard: true, value: 1, def: 1, onInput: function (v) { O.smooth = v; retrace(); } }));
+    topt.appendChild(UI.more('br_trace').add(
+      UI.seg({ key: 'trace.channel', value: 'auto', wide: true, options: ['auto', 'alpha', 'dark', 'light'].map(function (v) { return { v: v, label: t('ch.' + v) }; }), onChange: function (v) { O.channel = v; B.S = null; retrace(); } }),
+      UI.slider({ key: 'trace.minArea', min: 0, max: 2000, step: 5, unit: 'px²', floor: 0, value: 40, onInput: function (v) { O.minArea = v; retrace(); } }),
+      UI.toggle({ key: 'trace.invert', value: false, onChange: function (v) { O.invert = v; B.S = null; retrace(); } })));
+
+    // 3. logo slots
+    var s3 = UI.section('br_slots', 'br.s3'); pane.appendChild(s3);
+    var slots = el('div', 'olist br-list'); s3.body.appendChild(slots);
+    // 4. texts + font
+    var s4 = UI.section('br_texts', 'br.s4'); pane.appendChild(s4);
+    var allRow = el('div', 'color');
+    var allIn = el('input', 'txt'); allIn.placeholder = t('br.allPh'); allIn.dir = 'auto';
+    allRow.appendChild(allIn);
+    allRow.appendChild(UI.button('br.fill', { small: true, onClick: function () {
+      if (!B.scan) return;
+      B.scan.texts.forEach(function (x) { if (x.on) { x.newText = allIn.value; } });
+      renderTexts();
+    } }));
+    s4.body.appendChild(UI.row('br.all', allRow, { wide: true }));
+    var fontSel = UI.select({ key: 'br.font', options: [], value: '' });
+    s4.body.appendChild(fontSel);
+    var texts = el('div', 'olist br-list'); s4.body.appendChild(texts);
+
+    var go = el('div', 'btns full'); go.style.marginTop = '4px';
+    go.appendChild(UI.button('br.apply', { primary: true, icon: 'sparkle', onClick: doApply }));
+    pane.appendChild(go);
+
+    function fillFonts() {
+      var opts = [{ v: '', label: t('br.keepFont') }];
+      if (S.fonts) S.fonts.names.forEach(function (n) { S.fonts.families[n].forEach(function (st) { opts.push({ v: st.ps, label: n + ' — ' + st.style }); }); });
+      fontSel.fill(opts, fontSel.get() || '');
+    }
+    B.fontsReady = fillFonts;
+    fillFonts();
+
+    function doScan() {
+      return run('brand.scan', {}).then(function (r) {
+        r.logos.forEach(function (x) { x.on = x.likely && !x.shared; });
+        r.texts.forEach(function (x) { x.on = false; x.newText = x.text; });
+        B.scan = r;
+        sum.innerHTML = '';
+        [['logo', r.logos.length, 'br.nLogos'], ['text', r.texts.length, 'br.nTexts'], ['e3d', r.links.length, 'br.nLinks']].forEach(function (x) {
+          var c = el('span', 'br-chip', icon(x[0], 14) + '<b>' + x[1] + '</b><span>' + t(x[2]) + '</span>'); sum.appendChild(c);
+        });
+        renderSlots(); renderTexts();
+      }).catch(function () {});
+    }
+
+    function tags(x) {
+      var h = '';
+      (x.e3d || []).forEach(function (k) { h += '<span class="tag e3d">' + k + '</span>'; });
+      if (x.kind) h += '<span class="tag">' + t('slot.' + x.kind) + '</span>';
+      return h;
+    }
+    function thumb(x) {
+      if (x.kind === 'image' && x.file && !/\.(ai|eps|pdf|psd|exr|tga)$/i.test(x.file)) return '<img class="th" src="file:///' + encodeURI(x.file.replace(/\\/g, '/')) + '">';
+      if (x.kind === 'masks' && x.preview && x.box) {
+        var bx = x.box, k = 30 / Math.max(bx[2], bx[3], 1), d = '';
+        x.preview.forEach(function (p) { d += 'M' + p.map(function (q) { return ((q[0] - bx[0]) * k + 1).toFixed(1) + ' ' + ((q[1] - bx[1]) * k + 1).toFixed(1); }).join('L') + 'Z'; });
+        return '<svg class="th" viewBox="0 0 32 32"><path d="' + d + '" fill="#8f3dff" fill-rule="evenodd" opacity=".85"/></svg>';
+      }
+      return '<span class="th">' + icon(x.kind === 'shape' ? 'logo' : 'image', 16) + '</span>';
+    }
+    function rowFor(x, onToggle) {
+      var r = el('div', 'oitem br-item' + (x.on ? ' sel' : ''));
+      var cb = el('input'); cb.type = 'checkbox'; cb.checked = !!x.on;
+      cb.onclick = function (ev) { ev.stopPropagation(); x.on = cb.checked; r.classList.toggle('sel', x.on); if (onToggle) onToggle(); };
+      r.appendChild(cb);
+      return r;
+    }
+    function renderSlots() {
+      slots.innerHTML = '';
+      if (!B.scan) { slots.appendChild(el('div', 'empty', t('br.noScan'))); return; }
+      if (!B.scan.logos.length) { slots.appendChild(el('div', 'empty', t('br.noLogos'))); return; }
+      B.scan.logos.forEach(function (x) {
+        var r = rowFor(x);
+        r.insertAdjacentHTML('beforeend', thumb(x));
+        var nm = el('div', 'br-name'); nm.innerHTML = '<b></b><small></small><div class="tags">' + tags(x) + '</div>';
+        nm.querySelector('b').textContent = x.layer; nm.querySelector('small').textContent = x.comp + (x.shared ? ' · ' + t('br.shared') : '');
+        r.appendChild(nm);
+        r.appendChild(UI.iconBtn('target', t('br.reveal'), function () { quiet('brand.reveal', { key: x.key }); }));
+        slots.appendChild(r);
+      });
+    }
+    function renderTexts() {
+      texts.innerHTML = '';
+      if (!B.scan) { texts.appendChild(el('div', 'empty', t('br.noScan'))); return; }
+      if (!B.scan.texts.length) { texts.appendChild(el('div', 'empty', t('br.noTexts'))); return; }
+      B.scan.texts.forEach(function (x) {
+        var r = rowFor(x);
+        var box = el('div', 'br-name');
+        var inp = el('input', 'txt'); inp.value = x.newText; inp.dir = 'auto';
+        inp.oninput = function () { x.newText = inp.value; if (!x.on) { x.on = true; r.classList.add('sel'); r.firstChild.checked = true; } };
+        inp.onclick = function (ev) { ev.stopPropagation(); };
+        var meta = el('small'); meta.textContent = x.comp + ' · ' + x.layer;
+        box.appendChild(inp); box.appendChild(meta);
+        var tg = el('div', 'tags'); tg.innerHTML = tags(x); box.appendChild(tg);
+        r.appendChild(box);
+        r.appendChild(UI.iconBtn('target', t('br.reveal'), function () { quiet('brand.reveal', { key: x.key }); }));
+        texts.appendChild(r);
+      });
+    }
+
+    function pickLogo() {
+      var f = Dialog.open(['png', 'jpg', 'jpeg', 'psd', 'tif', 'tiff', 'webp', 'ai', 'eps', 'pdf', 'svg'], t('logo.file'));
+      if (!f) return;
+      B.logo = f; B.S = null; B.polys = null; B.vec = null;
+      var vector = /\.(ai|eps|pdf)$/i.test(f);
+      linfo.innerHTML = '';
+      var line = el('div', 'logo-line', icon(vector ? 'logo' : 'image', 14) + '<b></b><span class="tag"></span>');
+      line.querySelector('b').textContent = f.split(/[\\/]/).pop();
+      line.querySelector('.tag').textContent = t(vector ? 'kind.vector' : 'kind.raster');
+      linfo.appendChild(line);
+      linfo.appendChild(el('div', 'note'));
+      cv.style.display = vector ? 'none' : '';
+      topt.style.display = vector ? 'none' : '';
+      if (vector) {
+        linfo.lastChild.textContent = t('logo.vecHint');
+        return run('brand.vectorFromFile', { file: f }).then(function (r) { B.vec = r; }).catch(function () {});
+      }
+      retrace(true);
+    }
+    var rt = 0;
+    function retrace(now) {
+      clearTimeout(rt);
+      rt = setTimeout(function () {
+        if (!B.logo || /\.(ai|eps|pdf)$/i.test(B.logo)) return;
+        var p = B.S ? Promise.resolve(B.S) : Tracer.load(B.logo).then(function (img) { return (B.S = Tracer.sample(img, O)); });
+        p.then(function (S2) {
+          B.polys = Tracer.run(S2, O);
+          Tracer.draw(cv, S2, B.polys);
+          var holes = B.polys.filter(function (o) { return o.hole; }).length;
+          linfo.lastChild.textContent = t('trace.count', { n: B.polys.length - holes, h: holes });
+        }).catch(function () { App.error({ code: 'TRACE_LOAD' }); });
+      }, now ? 0 : 120);
+    }
+
+    // new logo outlines in their own pixel space: [{v,i,o,hole}]
+    function logoContours() {
+      if (B.vec) return markHolesGlobal(B.vec.contours);
+      if (!B.polys || !B.S) return null;
+      var k = B.S.scale;
+      return B.polys.map(function (o) { return { v: o.p.map(function (q) { return [q[0] * k, q[1] * k]; }), i: o.bz.i.map(function (q) { return [q[0] * k, q[1] * k]; }), o: o.bz.o.map(function (q) { return [q[0] * k, q[1] * k]; }), hole: o.hole }; });
+    }
+    // fit outlines inside a slot box (contain + centered), like the old logo's size and place
+    function fitTo(cs, box) {
+      var x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
+      cs.forEach(function (c) { if (c.hole) return; c.v.forEach(function (q) { x0 = Math.min(x0, q[0]); y0 = Math.min(y0, q[1]); x1 = Math.max(x1, q[0]); y1 = Math.max(y1, q[1]); }); });
+      var w = x1 - x0 || 1, h = y1 - y0 || 1, k = Math.min(box[2] / w, box[3] / h);
+      var ox = box[0] + (box[2] - w * k) / 2 - x0 * k, oy = box[1] + (box[3] - h * k) / 2 - y0 * k;
+      return cs.map(function (c) {
+        return { v: c.v.map(function (q) { return [q[0] * k + ox, q[1] * k + oy]; }), i: c.i.map(function (q) { return [q[0] * k, q[1] * k]; }), o: c.o.map(function (q) { return [q[0] * k, q[1] * k]; }), hole: !!c.hole };
+      });
+    }
+
+    function doApply() {
+      if (!B.scan) { UI.toast(t('br.noScan'), 'warn'); return; }
+      var logos = B.scan.logos.filter(function (x) { return x.on; }), txs = B.scan.texts.filter(function (x) { return x.on; });
+      var font = fontSel.get() || null;
+      if (!logos.length && !txs.length) { UI.toast(t('br.nothing'), 'warn'); return; }
+      if (logos.length && !B.logo) { UI.toast(t('br.needLogo'), 'warn'); return; }
+      var needsOutline = logos.some(function (x) { return x.kind !== 'image'; }), cs = null;
+      if (needsOutline) {
+        cs = logoContours();
+        if (!cs || !cs.length) { UI.toast(t('err.TRACE_EMPTY'), 'warn'); return; }
+      }
+      var plan = {
+        logoFile: B.logo, font: font,
+        logos: logos.map(function (x) { var o = { key: x.key, kind: x.kind }; if (x.kind !== 'image') o.contours = fitTo(cs, x.box); return o; }),
+        texts: txs.map(function (x) { return { key: x.key, text: x.newText }; })
+      };
+      if (font && !txs.length) plan.texts = B.scan.texts.map(function (x) { return { key: x.key, text: null }; });
+      return run('brand.apply', plan).then(function (r) {
+        UI.toast(t('br.done', { l: r.logos, t: r.texts }) + (r.skipped.length ? ' · ' + t('br.skipped', { n: r.skipped.length }) : ''), r.skipped.length ? 'warn' : 'ok');
+        if (r.skipped.length) console.warn(r.skipped);
+        S.listHash = ''; poll(true);
+        return doScan();
+      }).catch(function () {});
+    }
+    renderSlots(); renderTexts();
+  }
+
+  function markHolesGlobal(cs) {
+    function area(p) { var s2 = 0, i, j; for (i = 0, j = p.length - 1; i < p.length; j = i++) s2 += (p[j][0] - p[i][0]) * (p[j][1] + p[i][1]); return Math.abs(s2 / 2); }
+    function inside(q, poly) { var c = false, i, j; for (i = 0, j = poly.length - 1; i < poly.length; j = i++) { if (((poly[i][1] > q[1]) !== (poly[j][1] > q[1])) && (q[0] < (poly[j][0] - poly[i][0]) * (q[1] - poly[i][1]) / (poly[j][1] - poly[i][1]) + poly[i][0])) c = !c; } return c; }
+    var list = cs.map(function (c) { return { c: c, a: area(c.v) }; }).sort(function (a, b) { return b.a - a.a; });
+    list.forEach(function (o, i) { o.d = 0; for (var k = i - 1; k >= 0; k--) if (inside(o.c.v[0], list[k].c.v)) { o.d = list[k].d + 1; break; } o.c.hole = o.d % 2 === 1; });
+    return list.map(function (o) { return o.c; });
   }
 
   /* ====================== SCENE ====================== */

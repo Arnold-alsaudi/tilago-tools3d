@@ -360,7 +360,7 @@
   }
   window.Updater = Updater;
 
-  window.Host = { call: call, live: live, connected: !!cep, ensure: ensureHost };
+  window.Host = { call: call, live: live, connected: !!cep, ensure: ensureHost, extPath: extPath };
   window.Store = Store;
   window.Dialog = Dialog;
   window.Fonts = Fonts;

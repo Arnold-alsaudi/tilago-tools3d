@@ -453,3 +453,7 @@ body.narrow .hdr .tool-btn span { display: none; }
 .tags { display: flex; flex-wrap: wrap; gap: 4px; }
 .tags .tag { font-size: 9.5px; padding: 0 6px; background: rgba(143, 61, 255, .16); color: #c98bff; transform: skewX(-12deg); }
 .tags .tag.e3d { background: rgba(240, 183, 90, .14); color: #f0b75a; }
+
+.brand-logo { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.brand-logo img { width: 64px; height: 40px; object-fit: contain; background: repeating-conic-gradient(#160d26 0% 25%, #0c0616 0% 50%) 0 0 / 8px 8px; border: 1px solid var(--line); padding: 3px; }
+.brand-logo .btns { margin: 0; }

@@ -7,11 +7,21 @@
     info: null, caps: null, comp: null, items: [], active: null, sel: [], fonts: null,
     mode: 'native', tab: 'main', snapshot: null, listHash: '', busy: 0,
     settings: Object.assign({ live: true, sync: true, quality: 'mid', vpH: 240, vpOpen: true, shading: 'material', mode: 'native' }, Store.read('settings.json', {})),
-    draft: { text: 'Tilago', family: null, ps: null, size: 200, tracking: 0, leading: 0, align: 'center', rtl: false, fill: [0.33, 0.09, 0.71] },
+    draft: { text: 'TILAGO', family: null, ps: null, size: 200, tracking: 0, leading: 0, align: 'center', rtl: false, fill: [0.33, 0.09, 0.71] },
     surface: 'all', light: null, anim: { target: 'active', start: null, duration: 1.5, ease: 'ease', speed: 1, amount: 1, stagger: 0.08, replace: true, color: [1, 1, 1] },
     presetCat: 'material'
   };
   S.mode = S.settings.mode || 'native';
+  // Brand identity: Tilago logo + name + font by default, all changeable in Settings.
+  S.brand = Object.assign({ logo: null, name: 'TILAGO', font: null }, Store.read('brand.json', {}));
+  S.draft.text = S.brand.name;
+  function brandLogo() { return S.brand.logo || (Host.connected ? Host.extPath() + '/img/emblem.png' : 'img/emblem.png'); }
+  function saveBrand() { try { Store.write('brand.json', S.brand); } catch (e) {} }
+  function fontFamilyOf(ps) {
+    if (!S.fonts || !ps) return null;
+    for (var fam in S.fonts.families) if (S.fonts.families[fam].some(function (s) { return s.ps === ps; })) return fam;
+    return null;
+  }
   var R = {}; // UI references per pane
 
   function saveSettings() { S.settings.mode = S.mode; try { Store.write('settings.json', S.settings); } catch (e) {} }
@@ -111,6 +121,8 @@
   function loadFonts() {
     Fonts.load().then(function (f) {
       S.fonts = f;
+      var bf = fontFamilyOf(S.brand.font);
+      if (bf && !S.draft.family) { S.draft.family = bf; S.draft.ps = S.brand.font; }
       if (!S.draft.family) {
         var pref = ['Segoe UI', 'Arial', 'Tahoma'];
         for (var i = 0; i < pref.length; i++) if (f.families[pref[i]]) { S.draft.family = pref[i]; break; }
@@ -120,6 +132,7 @@
       }
       if (R.main) R.main.fontsReady();
       if (R.brand && R.brand.fontsReady) R.brand.fontsReady();
+      if (R.settings && R.settings.fontsReady) R.settings.fontsReady();
     }).catch(App.error);
   }
 
@@ -334,7 +347,7 @@
     R = { vp: R.vp };
     if (['main', 'brand', 'materials', 'scene', 'lighting', 'animation', 'settings'].indexOf(S.tab) < 0) S.tab = 'main';
     [['main', [buildMain]], ['brand', [buildBrand]], ['materials', [buildMaterials]], ['scene', [buildScene, buildCamera]], ['lighting', [buildLights, buildEnv]],
-     ['animation', [buildAnim]], ['settings', [buildPresets, buildSettings]]].forEach(function (p) {
+     ['animation', [buildAnim]], ['settings', [buildSettings, buildPresets]]].forEach(function (p) {
       var pane = el('div', 'pane' + (S.tab === p[0] ? ' on' : ''));
       pane.id = 'pane-' + p[0];
       main.appendChild(pane);
@@ -634,7 +647,7 @@
 
   /* ---------- Logo: import, one-click auto trace, link to Element 3D or native extrusion ---------- */
   function buildLogo(b, M) {
-    var L = { info: null, S: null, polys: null, key: '' };
+    var L = { info: null, S: null, polys: null, key: '', file: brandLogo() };
     var pick = el('div', 'btns full');
     pick.appendChild(UI.button('logo.file', { icon: 'upload', onClick: function () {
       var f = Dialog.open(['png', 'jpg', 'jpeg', 'psd', 'tif', 'tiff', 'webp', 'ai', 'eps', 'pdf', 'svg'], t('logo.file'));
@@ -661,7 +674,7 @@
     b.appendChild(go);
 
     function setLogo(inf) {
-      L.info = inf; L.S = null; L.polys = null;
+      L.info = inf; L.file = inf ? inf.file : brandLogo(); L.S = null; L.polys = null;
       M.logoRefresh();
       if (inf && inf.kind === 'raster') retrace(true);
     }
@@ -669,8 +682,9 @@
     function retrace(now) {
       clearTimeout(rt);
       rt = setTimeout(function () {
-        if (!L.info || L.info.kind !== 'raster' || !L.info.file) return;
-        var p = L.S ? Promise.resolve(L.S) : Tracer.load(L.info.file).then(function (img) { return (L.S = Tracer.sample(img, O)); });
+        var file = L.info ? L.info.file : L.file;
+        if (!file || (L.info && L.info.kind !== 'raster') || /\.(ai|eps|pdf)$/i.test(file)) return;
+        var p = L.S ? Promise.resolve(L.S) : Tracer.load(file).then(function (img) { return (L.S = Tracer.sample(img, O)); });
         p.then(function (S2) {
           L.polys = Tracer.run(S2, O);
           Tracer.draw(cv, S2, L.polys);
@@ -684,7 +698,17 @@
       infoEl.innerHTML = '';
       var e3d = S.mode === 'e3d';
       M.logoGo.querySelector('span').textContent = t(inf && inf.kind !== 'raster' ? (e3d ? 'logo.goVecE3D' : 'logo.goVec') : (e3d ? 'logo.goE3D' : 'logo.go'));
-      if (!inf) { infoEl.appendChild(UI.note(t('logo.hint'))); cv.style.display = 'none'; opts.style.display = 'none'; return; }
+      if (!inf) {
+        // no logo picked: the brand logo (Tilago by default) is ready to go
+        var bl = el('div', 'logo-line', icon('logo', 14) + '<b></b><span class="tag"></span>');
+        bl.querySelector('b').textContent = t(S.brand.logo ? 'brand.yourLogo' : 'brand.tilagoLogo');
+        bl.querySelector('.tag').textContent = t('brand.default');
+        infoEl.appendChild(bl); infoEl.appendChild(el('div', 'note'));
+        var vec = /\.(ai|eps|pdf)$/i.test(L.file);
+        cv.style.display = vec ? 'none' : ''; opts.style.display = vec ? 'none' : '';
+        if (!vec) retrace(true);
+        return;
+      }
       var line = el('div', 'logo-line', icon(inf.kind === 'raster' ? 'image' : 'logo', 14) + '<b></b><span class="tag"></span>');
       line.querySelector('b').textContent = inf.name;
       line.querySelector('.tag').textContent = t('kind.' + inf.kind);
@@ -693,11 +717,19 @@
       var raster = inf.kind === 'raster';
       cv.style.display = raster ? '' : 'none';
       opts.style.display = raster ? '' : 'none';
-      if (!raster) infoEl.lastChild.textContent = t('logo.vecHint');
+      if (!raster) infoEl.lastChild.textContent = t('logo.vecHint'); else retrace(true);
     };
 
     function doLogo() {
-      if (!L.info) { UI.toast(t('logo.hint'), 'warn'); return; }
+      if (!L.info) {
+        // bring the brand logo into the comp first, then continue with the same trace
+        var keep = { S: L.S, polys: L.polys };
+        return run('logo.importFile', { file: L.file }).then(function (inf) {
+          L.info = inf; L.S = keep.S; L.polys = keep.polys; M.logoRefresh();
+          if (inf.kind === 'raster' && !L.polys) throw { code: 'TRACE_EMPTY' };
+          return doLogo();
+        }).catch(App.error);
+      }
       var e3d = S.mode === 'e3d' && S.info && S.info.e3d;
       var as = e3d ? 'masks' : 'shape';
       var contoursP;
@@ -799,6 +831,7 @@
   /* ====================== REBRAND (templates, Element 3D aware) ====================== */
   function buildBrand(pane) {
     var B = R.brand = { scan: null, logo: null, S: null, polys: null, vec: null };
+    var BR = S.brand;
     var O = { channel: 'auto', threshold: 0.5, smooth: 1, minArea: 40, corner: 55, invert: false };
     pane.appendChild(UI.note(t('br.intro')));
 
@@ -830,7 +863,7 @@
     // 4. texts + font
     var s4 = UI.section('br_texts', 'br.s4'); pane.appendChild(s4);
     var allRow = el('div', 'color');
-    var allIn = el('input', 'txt'); allIn.placeholder = t('br.allPh'); allIn.dir = 'auto';
+    var allIn = el('input', 'txt'); allIn.placeholder = t('br.allPh'); allIn.dir = 'auto'; allIn.value = BR.name;
     allRow.appendChild(allIn);
     allRow.appendChild(UI.button('br.fill', { small: true, onClick: function () {
       if (!B.scan) return;
@@ -849,7 +882,7 @@
     function fillFonts() {
       var opts = [{ v: '', label: t('br.keepFont') }];
       if (S.fonts) S.fonts.names.forEach(function (n) { S.fonts.families[n].forEach(function (st) { opts.push({ v: st.ps, label: n + ' — ' + st.style }); }); });
-      fontSel.fill(opts, fontSel.get() || '');
+      fontSel.fill(opts, fontSel.get() || BR.font || '');
     }
     B.fontsReady = fillFonts;
     fillFonts();
@@ -925,11 +958,14 @@
     function pickLogo() {
       var f = Dialog.open(['png', 'jpg', 'jpeg', 'psd', 'tif', 'tiff', 'webp', 'ai', 'eps', 'pdf', 'svg'], t('logo.file'));
       if (!f) return;
+      return useLogo(f, false);
+    }
+    function useLogo(f, isDefault) {
       B.logo = f; B.S = null; B.polys = null; B.vec = null;
       var vector = /\.(ai|eps|pdf)$/i.test(f);
       linfo.innerHTML = '';
       var line = el('div', 'logo-line', icon(vector ? 'logo' : 'image', 14) + '<b></b><span class="tag"></span>');
-      line.querySelector('b').textContent = f.split(/[\\/]/).pop();
+      line.querySelector('b').textContent = isDefault ? t(BR.logo ? 'brand.yourLogo' : 'brand.tilagoLogo') : f.split(/[\\/]/).pop();
       line.querySelector('.tag').textContent = t(vector ? 'kind.vector' : 'kind.raster');
       linfo.appendChild(line);
       linfo.appendChild(el('div', 'note'));
@@ -999,6 +1035,7 @@
       }).catch(function () {});
     }
     renderSlots(); renderTexts();
+    useLogo(brandLogo(), true);
   }
 
   function markHolesGlobal(cs) {
@@ -1801,7 +1838,7 @@
   function buildPresets(pane) {
     var M = R.presets = {};
     var catSel = UI.select({ options: CATS.map(function (c) { return { v: c, label: t('pre.' + c) }; }), value: S.presetCat, onChange: function (v) { S.presetCat = v; M.refresh(); } });
-    var top = el('div', 'objbar'); top.style.cssText = 'margin:-10px -10px 10px;';
+    var top = el('div', 'objbar'); top.style.cssText = 'margin:0 0 10px;';
     top.appendChild(catSel.sel);
     pane.appendChild(top);
     var acts = el('div', 'btns'); acts.style.margin = '0 0 10px';
@@ -1878,6 +1915,44 @@
   /* ====================== SETTINGS ====================== */
   function buildSettings(pane) {
     var M = R.settings = {};
+    var bs = UI.section('brandId', 'brand.sec'); pane.appendChild(bs);
+    var lrow = el('div', 'brand-logo');
+    var limg = el('img'); limg.alt = '';
+    function paintLogo() {
+      var f = brandLogo();
+      limg.src = /^([a-z]:|[\\/])/i.test(f) ? 'file:///' + encodeURI(f.replace(/\\/g, '/')) : f;
+    }
+    paintLogo();
+    lrow.appendChild(limg);
+    var lbtns = el('div', 'btns');
+    lbtns.appendChild(UI.button('brand.change', { small: true, icon: 'upload', onClick: function () {
+      var f = Dialog.open(['png', 'jpg', 'jpeg', 'psd', 'tif', 'tiff', 'webp', 'ai', 'eps', 'pdf'], t('brand.change'));
+      if (!f) return;
+      S.brand.logo = f; saveBrand(); paintLogo(); UI.toast(t('pre.saved')); buildPanes();
+    } }));
+    lbtns.appendChild(UI.button('brand.reset', { small: true, icon: 'reset', onClick: function () { S.brand.logo = null; saveBrand(); paintLogo(); buildPanes(); } }));
+    lrow.appendChild(lbtns);
+    bs.body.appendChild(UI.row('brand.logo', lrow, { wide: true }));
+    var nameIn = el('input', 'txt'); nameIn.value = S.brand.name; nameIn.dir = 'auto';
+    nameIn.onchange = function () { S.brand.name = nameIn.value.trim() || 'TILAGO'; saveBrand(); S.draft.text = S.brand.name; UI.toast(t('pre.saved')); };
+    bs.body.appendChild(UI.row('brand.name', nameIn));
+    var bfont = UI.select({ key: 'brand.font', options: [], onChange: function (v) {
+      S.brand.font = v || null; saveBrand();
+      var fam = fontFamilyOf(v); if (fam) { S.draft.family = fam; S.draft.ps = v; if (R.main) R.main.fontsReady(); }
+      UI.toast(t('pre.saved'));
+    } });
+    bs.body.appendChild(bfont);
+    var bnote = el('div'); bs.body.appendChild(bnote);
+    M.fontsReady = function () {
+      var opts = [{ v: '', label: t('brand.noFont') }];
+      if (S.fonts) S.fonts.names.forEach(function (n) { S.fonts.families[n].forEach(function (st) { opts.push({ v: st.ps, label: n + ' — ' + st.style }); }); });
+      bfont.fill(opts, S.brand.font || '');
+      bnote.innerHTML = '';
+      if (!S.brand.font) bnote.appendChild(UI.note(t('brand.pickFont'), 'warn'));
+      else if (S.fonts && !fontFamilyOf(S.brand.font)) bnote.appendChild(UI.note(t('brand.fontMissing', { f: S.brand.font }), 'warn'));
+    };
+    M.fontsReady();
+
     var gs = UI.section('general', 'sec.general'); pane.appendChild(gs);
     gs.body.appendChild(UI.seg({ key: 'set.lang', value: I18N.lang, options: [{ v: 'ar', label: 'العربية' }, { v: 'en', label: 'English' }], onChange: function (v) { I18N.set(v); rebuild(); } }));
     gs.body.appendChild(UI.toggle({ key: 'set.live', value: S.settings.live, onChange: function (v) { S.settings.live = v; saveSettings(); } }));

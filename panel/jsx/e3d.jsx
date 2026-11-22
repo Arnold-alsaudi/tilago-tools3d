@@ -111,31 +111,31 @@
   };
 
   // Every parameter Element 3D exposes to scripting, with its own names, so nothing is invented.
+  // One level of the Element 3D effect at a time (it has thousands of parameters; reading them all
+  // at once freezes After Effects). a.path = indexes down to the group to read, [] for the top.
   M.params = function (a) {
-    var c = T.requireComp(), L = T.requireLayer(c, a.ref), ef = e3dEffect(L), out = [];
-    if (!ef) T.fail('E3D_NOT_LAYER', 'This layer has no Element 3D effect');
-    function walk(g, path, groupName, depth) {
-      var i, p, t, v, item;
-      for (i = 1; i <= g.numProperties; i++) {
-        p = g.property(i);
-        if (p.propertyType !== PropertyType.PROPERTY) {
-          if (depth < 4) walk(p, path.concat([i]), (groupName ? groupName + ' / ' : '') + p.name, depth + 1);
-          continue;
-        }
-        try { t = p.propertyValueType; v = T.toArr(p.value); } catch (e) { continue; }
-        if (t === PropertyValueType.NO_VALUE || t === PropertyValueType.CUSTOM_VALUE || t === PropertyValueType.MARKER || t === PropertyValueType.SHAPE || t === PropertyValueType.TEXT_DOCUMENT) continue;
-        item = { path: path.concat([i]), name: p.name, group: groupName || '', value: v, keys: p.numKeys };
-        if (t === PropertyValueType.OneD) item.type = p.isDropdownEffect ? 'menu' : 'num';
-        else if (t === PropertyValueType.COLOR) item.type = 'color';
-        else if (t === PropertyValueType.LAYER_INDEX) item.type = 'layer';
-        else if (t === PropertyValueType.TwoD || t === PropertyValueType.TwoD_SPATIAL) item.type = 'vec2';
-        else if (t === PropertyValueType.ThreeD || t === PropertyValueType.ThreeD_SPATIAL) item.type = 'vec3';
-        else continue;
-        try { if (p.hasMin) item.min = p.minValue; if (p.hasMax) item.max = p.maxValue; } catch (e2) {}
-        out.push(item);
+    var c = T.requireComp(), L = T.requireLayer(c, a.ref), g = e3dEffect(L), out = { groups: [], params: [] }, path = a.path || [], i, p, t, v, item;
+    if (!g) T.fail('E3D_NOT_LAYER', 'This layer has no Element 3D effect');
+    for (i = 0; i < path.length; i++) g = g.property(path[i]);
+    for (i = 1; i <= g.numProperties; i++) {
+      p = g.property(i);
+      if (p.propertyType !== PropertyType.PROPERTY) {
+        if (p.numProperties > 0) out.groups.push({ path: path.concat([i]), name: p.name, count: p.numProperties });
+        continue;
       }
+      try { t = p.propertyValueType; } catch (e) { continue; }
+      if (t !== PropertyValueType.OneD && t !== PropertyValueType.COLOR && t !== PropertyValueType.TwoD && t !== PropertyValueType.TwoD_SPATIAL &&
+          t !== PropertyValueType.ThreeD && t !== PropertyValueType.ThreeD_SPATIAL) continue;
+      try { v = T.toArr(p.value); } catch (e1) { continue; }
+      item = { path: path.concat([i]), name: p.name, value: v };
+      if (t === PropertyValueType.OneD) item.type = p.isDropdownEffect ? 'menu' : 'num';
+      else if (t === PropertyValueType.COLOR) item.type = 'color';
+      else if (t === PropertyValueType.TwoD || t === PropertyValueType.TwoD_SPATIAL) item.type = 'vec2';
+      else item.type = 'vec3';
+      try { if (p.hasMin) item.min = p.minValue; if (p.hasMax) item.max = p.maxValue; } catch (e2) {}
+      out.params.push(item);
+      if (out.params.length >= 120) break;
     }
-    walk(ef, [], '', 0);
     return out;
   };
 

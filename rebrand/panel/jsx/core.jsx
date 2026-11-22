@@ -9,19 +9,15 @@ $.global.TSRB = $.global.TSRB || {};
   T.modules = T.modules || {};
 
   /* ---------- JSON (ExtendScript has none) ---------- */
+  var ESC = { '"': '\\"', '\\': '\\\\', '\n': '\\n', '\r': '\\r', '\t': '\\t' };
+  // one regex pass instead of a char-by-char loop: big results (fonts, effects) stay fast in ExtendScript
   function esc(s) {
-    var out = '', i, c, h;
-    for (i = 0; i < s.length; i++) {
-      c = s.charCodeAt(i);
-      if (c === 34) out += '\\"';
-      else if (c === 92) out += '\\\\';
-      else if (c === 10) out += '\\n';
-      else if (c === 13) out += '\\r';
-      else if (c === 9) out += '\\t';
-      else if (c < 32 || c > 126) { h = c.toString(16); while (h.length < 4) h = '0' + h; out += '\\u' + h; }
-      else out += s.charAt(i);
-    }
-    return '"' + out + '"';
+    return '"' + String(s).replace(/["\\\u0000-\u001f\u007f-￿]/g, function (ch) {
+      if (ESC[ch]) return ESC[ch];
+      var h = ch.charCodeAt(0).toString(16);
+      while (h.length < 4) h = '0' + h;
+      return '\\u' + h;
+    }) + '"';
   }
   T.stringify = function (v) {
     var t = typeof v, i, parts, k;

@@ -767,35 +767,43 @@
   }
 
   // Generic inspector: shows the real parameters an effect exposes, with its own names.
+  // Generic inspector: shows the real parameters an effect exposes, with its own names.
+  // Loaded one group at a time, only when that group is opened.
   function paramsInspector(parent, ref) {
     var holder = el('div');
     holder.appendChild(el('div', 'sub-h', t('e3d.params')));
     parent.appendChild(holder);
-    Host.call('e3d.params', { ref: ref }).then(function (params) {
-      var groups = {};
-      params.forEach(function (p) { (groups[p.group || '—'] = groups[p.group || '—'] || []).push(p); });
-      Object.keys(groups).forEach(function (g, gi) {
-        var s = UI.section('e3dp_' + gi, 'x', { closed: gi > 0 });
-        s.head.querySelector('.sec-t').textContent = g;
-        holder.appendChild(s);
-        groups[g].forEach(function (p) {
-          var send = function (v, final) { live('e3d' + p.path.join('_'), 'e3d.setParam', { ref: ref, path: p.path, type: p.type, value: v }, final); };
-          var ctl;
-          if (p.type === 'num' || p.type === 'menu') {
-            var mn = p.min !== undefined ? p.min : 0, mx = p.max !== undefined ? p.max : Math.max(100, Math.abs(p.value) * 4);
-            if (mx - mn > 100000) { mn = Math.min(p.value, 0); mx = Math.max(p.value * 4, 1000); }
-            ctl = UI.slider({ key: 'x', min: mn, max: mx, step: p.type === 'menu' ? 1 : (mx - mn > 50 ? 1 : 0.01), value: p.value, hard: p.min !== undefined && p.max !== undefined, onInput: function (v) { send(v); }, onChange: function (v) { send(v, true); } });
-          } else if (p.type === 'color') {
-            ctl = UI.color({ key: 'x', value: p.value, onInput: function (c) { send(c); }, onChange: function (c) { send(c, true); } });
-          } else if (p.type === 'vec2' || p.type === 'vec3') {
-            ctl = UI.vec({ key: 'x', axes: p.type === 'vec2' ? 2 : 3, value: p.value, step: 1, onInput: function (v) { send(v); }, onChange: function (v) { send(v, true); } });
-          } else return;
-          ctl.label.textContent = p.name;
-          ctl.label.removeAttribute('data-tip');
-          s.body.appendChild(ctl);
+    level(holder, []);
+    function level(box, path) {
+      return Host.call('e3d.params', { ref: ref, path: path }).then(function (r) {
+        r.params.forEach(function (p) { var c = control(p); if (c) box.appendChild(c); });
+        r.groups.forEach(function (g) {
+          var s = UI.section('e3dg_' + g.path.join('_'), 'x', { closed: true });
+          s.head.querySelector('.sec-t').textContent = g.name;
+          var loaded = false;
+          function load() { if (loaded) return; loaded = true; level(s.body, g.path); }
+          s.head.addEventListener('click', function () { if (s.classList.contains('open')) load(); });
+          if (s.classList.contains('open')) load();
+          box.appendChild(s);
         });
-      });
-    }).catch(App.error);
+      }).catch(App.error);
+    }
+    function control(p) {
+      var send = function (v, final) { live('e3d' + p.path.join('_'), 'e3d.setParam', { ref: ref, path: p.path, type: p.type, value: v }, final); };
+      var ctl;
+      if (p.type === 'num' || p.type === 'menu') {
+        var mn = p.min !== undefined ? p.min : 0, mx = p.max !== undefined ? p.max : Math.max(100, Math.abs(p.value) * 4);
+        if (mx - mn > 100000) { mn = Math.min(p.value, 0); mx = Math.max(p.value * 4, 1000); }
+        ctl = UI.slider({ key: 'x', min: mn, max: mx, step: p.type === 'menu' ? 1 : (mx - mn > 50 ? 1 : 0.01), value: p.value, hard: p.min !== undefined && p.max !== undefined, onInput: function (v) { send(v); }, onChange: function (v) { send(v, true); } });
+      } else if (p.type === 'color') {
+        ctl = UI.color({ key: 'x', value: p.value, onInput: function (c) { send(c); }, onChange: function (c) { send(c, true); } });
+      } else if (p.type === 'vec2' || p.type === 'vec3') {
+        ctl = UI.vec({ key: 'x', axes: p.type === 'vec2' ? 2 : 3, value: p.value, step: 1, onInput: function (v) { send(v); }, onChange: function (v) { send(v, true); } });
+      } else return null;
+      ctl.label.textContent = p.name;
+      ctl.label.removeAttribute('data-tip');
+      return ctl;
+    }
   }
 
   /* ====================== SCENE ====================== */

@@ -9,7 +9,7 @@
       var img = new Image();
       img.onload = function () { ok(img); };
       img.onerror = function () { no(new Error('image')); };
-      img.src = /^(https?:|data:|blob:)/.test(file) || !/^([a-z]:|[\\/])/i.test(file) ? file : 'file:///' + encodeURI(file.replace(/\\/g, '/')).replace(/#/g, '%23');
+      img.src = /^(https?:|data:|blob:)/.test(file) ? file : 'file:///' + encodeURI(file.replace(/\\/g, '/')).replace(/#/g, '%23');
     });
   }
 

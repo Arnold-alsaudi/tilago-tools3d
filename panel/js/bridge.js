@@ -75,7 +75,7 @@
       var job = pending[channel];
       if (!job) { running[channel] = false; return; }
       pending[channel] = null;
-      call(job.name, job.args).catch(function (e) { if (window.App) App.error(e); }).then(function () { setTimeout(pump, 30); });
+      call(job.name, job.args).catch(function (e) { if (window.App) App.error(e); }).then(function () { setTimeout(pump, 110); });
     })();
   }
 

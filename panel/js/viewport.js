@@ -94,7 +94,7 @@
   V.resize = function () {
     if (!renderer || !host) return;
     var w = Math.max(10, host.clientWidth), h = Math.max(10, host.clientHeight);
-    var pr = quality === 'high' ? Math.min(2, window.devicePixelRatio * 1.5) : (quality === 'low' ? 0.75 : Math.min(1.5, window.devicePixelRatio));
+    var pr = quality === 'high' ? Math.min(1.5, window.devicePixelRatio) : (quality === 'low' ? 0.6 : 1);
     renderer.setPixelRatio(pr);
     renderer.setSize(w, h, false);
     renderer.domElement.style.width = w + 'px'; renderer.domElement.style.height = h + 'px';

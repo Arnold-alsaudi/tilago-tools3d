@@ -6,11 +6,13 @@
   var S = {
     info: null, caps: null, comp: null, items: [], active: null, sel: [], fonts: null,
     mode: 'native', tab: 'main', snapshot: null, listHash: '', busy: 0,
-    settings: Object.assign({ live: true, sync: true, quality: 'mid', vpH: 240, vpOpen: true, shading: 'material', mode: 'native' }, Store.read('settings.json', {})),
+    settings: Object.assign({ live: false, sync: true, quality: 'mid', vpH: 240, vpOpen: true, shading: 'material', mode: 'native' }, Store.read('settings.json', {})),
     draft: { text: 'TILAGO', family: null, ps: null, size: 200, tracking: 0, leading: 0, align: 'center', rtl: false, fill: [0.33, 0.09, 0.71] },
     surface: 'all', light: null, anim: { target: 'active', start: null, duration: 1.5, ease: 'ease', speed: 1, amount: 1, stagger: 0.08, replace: true, color: [1, 1, 1] },
     presetCat: 'material'
   };
+  // 1.5.1: AE now updates when you release a slider (the panel preview stays instant); far lighter on the machine
+  if (!S.settings.perf1) { S.settings.perf1 = true; S.settings.live = false; try { Store.write('settings.json', S.settings); } catch (e) {} }
   S.mode = S.settings.mode || 'native';
   // Brand identity: Tilago logo + name + font by default, all changeable in Settings.
   S.brand = Object.assign({ logo: null, name: 'TILAGO', font: null }, Store.read('brand.json', {}));
@@ -114,7 +116,8 @@
       buildPanes(); updateChips();
       if (!S.fonts) loadFonts();
       poll(true);
-      setInterval(function () { poll(false); }, 1500);
+      // light polling: every 2.5s while you use the panel, every 8s while you work in After Effects
+      (function loop() { setTimeout(function () { poll(false); loop(); }, document.hasFocus() ? 2500 : 8000); })();
     }).catch(function (e) { busy(false); App.error(e); buildPanes(); if (!S.fonts) loadFonts(); });
   }
 
@@ -164,7 +167,7 @@
       }
       if (compChanged) { updateChips(); if (R.settings) R.settings.refresh(); }
       if (listChanged || compChanged || force) { renderObjbar(); if (R.scene) R.scene.renderList(); refreshSnapshot(); if (compChanged) refreshActive(); }
-      else if (++pollN % 2 === 0 && !dragging()) refreshSnapshot();
+      else if (++pollN % 6 === 0 && document.hasFocus() && !dragging()) refreshSnapshot();
     }).catch(function () { polling = false; });
   }
   var dragT = 0;
@@ -176,7 +179,7 @@
     return Host.call('scene.snapshot', {}).then(function (snap) {
       if (!snap || !snap.comp) { $('#vpMsg').textContent = t('scene.nocomp'); return; }
       $('#vpMsg').textContent = snap.objects && snap.objects.length ? '' : t('scene.empty');
-      var key = JSON.stringify(snap);
+      var key = JSON.stringify(Object.assign({}, snap, { time: 0 }));
       if (key === S.snapKey) return;
       S.snapKey = key;
       S.snapshot = snap;

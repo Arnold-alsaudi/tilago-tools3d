@@ -296,7 +296,7 @@ body {
   background: linear-gradient(90deg, rgba(122, 0, 255, 0), #9a3dff 30%, #c98bff 50%, #9a3dff 70%, rgba(122, 0, 255, 0));
 }
 .brand { gap: 10px; }
-.emblem { height: 30px; display: block; filter: drop-shadow(0 0 8px rgba(154, 61, 255, .6)); animation: breathe 5s ease-in-out infinite; }
+.emblem { height: 30px; display: block; filter: drop-shadow(0 0 9px rgba(154, 61, 255, .6)); }
 @keyframes breathe { 0%, 100% { filter: drop-shadow(0 0 7px rgba(154, 61, 255, .5)); } 50% { filter: drop-shadow(0 0 13px rgba(170, 130, 255, .8)); } }
 .brand-txt { display: flex; flex-direction: column; gap: 3px; }
 .word { height: 13px; display: block; align-self: flex-start; }

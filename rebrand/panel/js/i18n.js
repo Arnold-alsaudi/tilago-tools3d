@@ -11,6 +11,8 @@
     'brand.logo': ['اللوجو', 'Logo'], 'brand.name': ['الاسم', 'Name'], 'brand.font': ['الخط', 'Font', 'خط البراند لكل النصوص اللي هتتبدل', 'Brand font for every replaced text'],
     'brand.c1': ['اللون الأساسي', 'Main color'], 'brand.c2': ['اللون التاني', 'Second color'],
     'brand.change': ['غيّر', 'Change'], 'brand.reset': ['لوجو Tilago', 'Tilago logo'], 'brand.keepFont': ['سيب الخط زي ما هو', 'Keep current font'],
+    'brand.textOnly': ['شيل اللوجو واستخدم الاسم بس', 'Remove logo, use the name only'],
+    'brand.textNote': ['من غير لوجو: الاسم بخط البراند هيتحط مكان اللوجو في كل حتة، وجوه Element 3D كمان. "لوجو Tilago" أو "غيّر" يرجّعوا لوجو.', 'No logo: the name in the brand font replaces the logo everywhere, inside Element 3D too. "Tilago logo" or "Change" bring a logo back.'],
     'brand.tilago': ['لوجو Tilago', 'Tilago logo'], 'brand.custom': ['لوجو البراند', 'Brand logo'],
     'trace.title': ['شكل الـ Trace', 'Trace shape'],
     'trace.why': ['بيستخدم للأماكن المعمولة Masks أو Shape (زي Path Layer بتاع Element 3D). الصور بتتبدل بالصورة نفسها.', 'Used for places built from masks or shapes (like an Element 3D Path Layer). Images are swapped with the image itself.'],

@@ -11,7 +11,50 @@
     mats: {}, env: null, fonts: null
   };
   function saveBrand() { try { Store.write('brand.json', S.brand); } catch (e) {} }
-  function brandLogo() { return S.brand.logo || (Host.connected ? Host.extPath() + '/img/emblem.png' : 'img/emblem.png'); }
+  function brandLogo() {
+    if (S.brand.textOnly) return S.textAsset || '';
+    return S.brand.logo || (Host.connected ? Host.extPath() + '/img/emblem.png' : 'img/emblem.png');
+  }
+
+  /* ---------- text-only brand: the name, in the brand font, becomes the logo ---------- */
+  function fontCss() {
+    var fam = null, style = '';
+    if (S.fonts && S.brand.font) {
+      Object.keys(S.fonts.families).some(function (f) {
+        return S.fonts.families[f].some(function (st) { if (st.ps === S.brand.font) { fam = f; style = st.style; return true; } return false; });
+      });
+    }
+    var w = /black|heavy/i.test(style) ? 900 : /extra ?bold|ultra ?bold/i.test(style) ? 800 : /semi ?bold|demi/i.test(style) ? 600 : /bold/i.test(style) ? 700 :
+            /medium/i.test(style) ? 500 : /extra ?light|ultra ?light|thin/i.test(style) ? 200 : /light/i.test(style) ? 300 : (fam ? 400 : 800);
+    return { family: fam || 'Segoe UI', weight: w, italic: /italic|oblique/i.test(style) };
+  }
+  // Renders the name to a transparent PNG (Chromium shapes Arabic correctly); used for image places,
+  // Element 3D textures, and traced into outlines for mask / shape places.
+  function makeTextAsset() {
+    var key = S.brand.name + '|' + S.brand.font;
+    if (S.textAsset && S.textKey === key) return Promise.resolve(S.textAsset);
+    var fc = fontCss(), size = 360, css = (fc.italic ? 'italic ' : '') + fc.weight + ' ' + size + 'px "' + fc.family + '"';
+    var ready = document.fonts && document.fonts.load ? document.fonts.load(css, S.brand.name).catch(function () {}) : Promise.resolve();
+    return ready.then(function () {
+      var cv = document.createElement('canvas'), cx = cv.getContext('2d');
+      cx.font = css;
+      var m = cx.measureText(S.brand.name), pad = Math.round(size * 0.25);
+      var asc = m.actualBoundingBoxAscent || size * 0.8, desc = m.actualBoundingBoxDescent || size * 0.25;
+      cv.width = Math.max(8, Math.ceil(m.width + pad * 2)); cv.height = Math.ceil(asc + desc + pad * 2);
+      cx = cv.getContext('2d'); cx.font = css; cx.fillStyle = '#ffffff'; cx.textBaseline = 'alphabetic';
+      cx.direction = /[\u0600-\u06FF]/.test(S.brand.name) ? 'rtl' : 'ltr'; cx.textAlign = 'center';
+      cx.fillText(S.brand.name, cv.width / 2, pad + asc);
+      var url = cv.toDataURL('image/png'), out = url;
+      if (Store.available && typeof Buffer !== 'undefined') {
+        out = Store.tmpFile('brand-text-' + Date.now() + '.png');
+        require('fs').writeFileSync(out, Buffer.from(url.split(',')[1], 'base64'));
+        out = out.replace(/\\/g, '/');
+      }
+      S.textAsset = out; S.textKey = key; S.logoS = null; S.polys = null;
+      return out;
+    });
+  }
+  function ensureLogo() { return S.brand.textOnly ? makeTextAsset() : Promise.resolve(brandLogo()); }
   function fileUrl(f) { return /^([a-z]:|[\\/])/i.test(f) ? 'file:///' + encodeURI(f.replace(/\\/g, '/')) : f; }
   function hex(c) { return UI.toHex(c || [1, 1, 1]); }
 
@@ -102,21 +145,35 @@
     main.appendChild(s);
     var b = s.body;
     var row = el('div', 'brand-logo');
-    var img = el('img'); img.alt = ''; img.src = fileUrl(brandLogo());
-    row.appendChild(img);
+    var box = el('div', 'logo-box');
+    if (S.brand.textOnly) {
+      var fc = fontCss(), prev = el('div', 'logo-text');
+      prev.textContent = S.brand.name;
+      prev.style.fontFamily = '"' + fc.family + '", var(--font)'; prev.style.fontWeight = fc.weight; if (fc.italic) prev.style.fontStyle = 'italic';
+      box.appendChild(prev);
+    } else {
+      var img = el('img'); img.alt = ''; img.src = fileUrl(brandLogo());
+      box.appendChild(img);
+      var x = el('button', 'logo-x', icon('x', 10)); x.type = 'button';
+      x.setAttribute('data-tip', t('brand.textOnly')); x.setAttribute('aria-label', t('brand.textOnly'));
+      x.onclick = function () { S.brand.textOnly = true; saveBrand(); resetLogo(); build(); };
+      box.appendChild(x);
+    }
+    row.appendChild(box);
     var bb = el('div', 'btns');
     bb.appendChild(UI.button('brand.change', { small: true, icon: 'upload', onClick: function () {
       var f = Dialog.open(['png', 'jpg', 'jpeg', 'psd', 'tif', 'tiff', 'webp', 'ai', 'eps', 'pdf'], t('brand.change'));
       if (!f) return;
-      S.brand.logo = f; saveBrand(); resetLogo(); build();
+      S.brand.logo = f; S.brand.textOnly = false; saveBrand(); resetLogo(); build();
     } }));
-    bb.appendChild(UI.button('brand.reset', { small: true, icon: 'reset', onClick: function () { S.brand.logo = null; saveBrand(); resetLogo(); build(); } }));
+    bb.appendChild(UI.button('brand.reset', { small: true, icon: 'reset', onClick: function () { S.brand.logo = null; S.brand.textOnly = false; saveBrand(); resetLogo(); build(); } }));
     row.appendChild(bb);
     b.appendChild(UI.row('brand.logo', row, { wide: true }));
+    if (S.brand.textOnly) b.appendChild(UI.note(t('brand.textNote')));
     var name = el('input', 'txt'); name.value = S.brand.name; name.dir = 'auto';
-    name.onchange = function () { S.brand.name = name.value.trim() || 'TILAGO'; saveBrand(); };
+    name.onchange = function () { S.brand.name = name.value.trim() || 'TILAGO'; saveBrand(); if (S.brand.textOnly) { resetLogo(); build(); } };
     b.appendChild(UI.row('brand.name', name));
-    var font = UI.select({ key: 'brand.font', options: [], onChange: function (v) { S.brand.font = v || null; saveBrand(); } });
+    var font = UI.select({ key: 'brand.font', options: [], onChange: function (v) { S.brand.font = v || null; saveBrand(); if (S.brand.textOnly) { resetLogo(); build(); } } });
     b.appendChild(font);
     function fillFonts() {
       var o = [{ v: '', label: t('brand.keepFont') }];
@@ -124,11 +181,11 @@
       font.fill(o, S.brand.font || '');
     }
     fillFonts();
-    if (!S.fonts) Fonts.load().then(function (f) { S.fonts = f; fillFonts(); }).catch(function () {});
+    if (!S.fonts) Fonts.load().then(function (f) { S.fonts = f; fillFonts(); if (S.brand.textOnly && S.brand.font) { resetLogo(); build(); } }).catch(function () {});
     b.appendChild(UI.color({ key: 'brand.c1', value: S.brand.c1, onChange: function (c) { S.brand.c1 = c; saveBrand(); paintMats(); } }));
     b.appendChild(UI.color({ key: 'brand.c2', value: S.brand.c2, onChange: function (c) { S.brand.c2 = c; saveBrand(); paintMats(); } }));
   }
-  function resetLogo() { S.logoS = null; S.polys = null; S.vec = null; }
+  function resetLogo() { S.logoS = null; S.polys = null; S.vec = null; S.textAsset = null; S.textKey = null; }
 
   /* 3. logo places (+ trace for mask / shape places) */
   var L = {};
@@ -191,7 +248,7 @@
   function retrace(now) {
     clearTimeout(rt);
     rt = setTimeout(function () {
-      var f = brandLogo();
+      ensureLogo().then(function (f) {
       if (/\.(ai|eps|pdf)$/i.test(f)) { if (L.cv) L.cv.style.display = 'none'; return; }
       var p = S.logoS ? Promise.resolve(S.logoS) : Tracer.load(f).then(function (img) { return (S.logoS = Tracer.sample(img, S.trace)); });
       p.then(function (s2) {
@@ -200,6 +257,7 @@
         var h = S.polys.filter(function (o) { return o.hole; }).length;
         if (L.count) L.count.textContent = t('trace.count', { n: S.polys.length - h, h: h });
       }).catch(function () { App.error({ code: 'TRACE_LOAD' }); });
+      });
     }, now ? 0 : 120);
   }
   // redraw when the fold opens (canvas has no size while hidden)
@@ -383,7 +441,7 @@
     }
     var steps = ['p.save'].concat(layers ? ['p.layers'] : []).concat(e3d ? ['p.e3d', 'p.open'] : []), cur = 0, newPath = null;
     function next() { cur++; progress(steps, cur); }
-    var pre = S.proj && S.proj.dirty ? UI.confirm(t('needSave')) : Promise.resolve(true);
+    var pre = (S.proj && S.proj.dirty ? UI.confirm(t('needSave')) : Promise.resolve(true)).then(function (ok) { return ok ? ensureLogo().then(function () { return true; }) : ok; });
     return pre.then(function (ok) {
       if (!ok) return;
       progress(steps, 0);

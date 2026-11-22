@@ -247,5 +247,6 @@
     return { contours: contours };
   };
 
+  T.shapeContours = shapeContours;
   T.modules.text = M;
 })($.global.TS3D);

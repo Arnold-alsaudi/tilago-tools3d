@@ -78,7 +78,9 @@
   M.create = function (a) {
     var c = T.requireComp(), mn = e3dMatch(), TL = T.requireLayer(c, a.textRef), S;
     if (!mn) T.fail('E3D_MISSING', 'Element 3D is not installed');
-    if (!T.isText(TL) && !T.isShape(TL)) T.fail('NOT_TEXT', 'Select a text or shape layer');
+    var hasMasks = false;
+    try { hasMasks = TL.property('ADBE Mask Parade').numProperties > 0; } catch (e0) {}
+    if (!T.isText(TL) && !T.isShape(TL) && !hasMasks) T.fail('NOT_TEXT', 'Select a text, shape or masked layer');
     T.undo('Element 3D layer', function () {
       if (a.templateRef) {
         S = T.requireLayer(c, a.templateRef).duplicate();

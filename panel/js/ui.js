@@ -1,45 +1,50 @@
 /* UI kit: sections, sliders with scrubbable labels, vectors, color picker with HEX, selects,
    segmented controls, toggles, tooltips, toasts and in-panel dialogs. No external libraries. */
 (function () {
+  // Hand-drawn 24px outline set, one stroke weight, same corner language everywhere.
   var ICON = {
-    text: 'M5 5h14M12 5v14M8 19h8',
-    scene: 'M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3zm0 0v9m8-4.5L12 12 4 7.5',
-    materials: 'M12 3a9 9 0 100 18c1.1 0 1.5-.8 1.5-1.6 0-1.3-1-1.4-1-2.6 0-.9.7-1.6 1.6-1.6H16a5 5 0 005-5C21 6.3 17 3 12 3zM7.5 12a1.3 1.3 0 110-.1M9.5 7.5a1.3 1.3 0 110-.1M14.5 7.5a1.3 1.3 0 110-.1',
-    environment: 'M12 3a9 9 0 100 18 9 9 0 000-18zM3.5 9h17M3.5 15h17M12 3c2.5 2.5 3.5 5.5 3.5 9s-1 6.5-3.5 9c-2.5-2.5-3.5-5.5-3.5-9s1-6.5 3.5-9z',
-    lighting: 'M9 18h6M10 21h4M12 3a6 6 0 00-3.5 10.9c.6.4 1 1.1 1 1.8V16h5v-.3c0-.7.4-1.4 1-1.8A6 6 0 0012 3z',
-    camera: 'M4 8h3l2-3h6l2 3h3v11H4V8zm8 3a3.5 3.5 0 100 7 3.5 3.5 0 000-7z',
-    animation: 'M7 4v16l13-8L7 4z',
-    presets: 'M4 5h7v6H4zM13 5h7v6h-7zM4 13h7v6H4zM13 13h7v6h-7z',
-    settings: 'M12 9a3 3 0 100 6 3 3 0 000-6zm7.4 4.5l1.6 1.2-2 3.5-1.9-.7a7 7 0 01-1.7 1l-.3 2H9.9l-.3-2a7 7 0 01-1.7-1l-1.9.7-2-3.5 1.6-1.2a7 7 0 010-2l-1.6-1.2 2-3.5 1.9.7a7 7 0 011.7-1l.3-2h4.2l.3 2a7 7 0 011.7 1l1.9-.7 2 3.5-1.6 1.2a7 7 0 010 2z',
-    chevron: 'M8 10l4 4 4-4',
-    eye: 'M2 12s3.6-6 10-6 10 6 10 6-3.6 6-10 6S2 12 2 12zm10-3a3 3 0 100 6 3 3 0 000-6z',
-    eyeOff: 'M3 3l18 18M10.6 6.1A10 10 0 0112 6c6.4 0 10 6 10 6a17 17 0 01-3.1 3.6M6.6 6.6C3.8 8.3 2 12 2 12s3.6 6 10 6c1.6 0 3-.4 4.3-1',
-    lock: 'M6 11h12v9H6zM8.5 11V8a3.5 3.5 0 017 0v3',
-    unlock: 'M6 11h12v9H6zM8.5 11V8a3.5 3.5 0 016.8-1.2',
-    copy: 'M8 8h11v11H8zM5 16V5h11',
-    trash: 'M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3',
-    group: 'M3 7h8v6H3zM13 11h8v6h-8zM7 13v4h6',
-    ungroup: 'M3 5h8v6H3zM13 13h8v6h-8z',
-    target: 'M12 4v4M12 16v4M4 12h4M16 12h4M12 9a3 3 0 100 6 3 3 0 000-6z',
-    reset: 'M4 12a8 8 0 108-8 8 8 0 00-6.3 3M4 4v4h4',
+    text: 'M5 6V4.5h14V6M12 4.5v15M9 19.5h6',
+    scene: 'M12 2.8l8 4.4v9.6l-8 4.4-8-4.4V7.2zM4.3 7.4L12 11.8l7.7-4.4M12 11.8v9.2',
+    materials: 'M12 3.5a8.5 8.5 0 108.5 8.5M12 3.5c-2.6 2.2-4 5.1-4 8.5M20.5 12H12M15.5 4.3a8.6 8.6 0 014.2 4.2',
+    environment: 'M3 17l5-6 4 4 3-3 6 5M3 20.5h18M16 7.5a1.8 1.8 0 100-.1',
+    lighting: 'M9.5 17.5h5M10.5 20.5h3M12 3.5a5.8 5.8 0 00-3.4 10.5c.6.5.9 1.1.9 1.9v.1h5v-.1c0-.8.3-1.4.9-1.9A5.8 5.8 0 0012 3.5z',
+    camera: 'M3.5 8h3.2l1.8-2.5h7l1.8 2.5h3.2v11h-17zM12 10.5a3.3 3.3 0 100 6.6 3.3 3.3 0 000-6.6z',
+    animation: 'M4 12h3l2.5-6 5 12 2.5-6h3',
+    presets: 'M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM16.5 13v7M13 16.5h7',
+    settings: 'M4 7h9M17 7h3M4 17h3M11 17h9M15 4.5v5M9 14.5v5',
+    chevron: 'M7 10l5 5 5-5',
+    eye: 'M2.5 12s3.5-6.5 9.5-6.5 9.5 6.5 9.5 6.5-3.5 6.5-9.5 6.5S2.5 12 2.5 12zM12 9.3a2.7 2.7 0 100 5.4 2.7 2.7 0 000-5.4z',
+    eyeOff: 'M3.5 3.5l17 17M9.9 5.8c.7-.2 1.4-.3 2.1-.3 6 0 9.5 6.5 9.5 6.5a16 16 0 01-2.6 3.4M6.4 6.9C4 8.6 2.5 12 2.5 12s3.5 6.5 9.5 6.5c1.5 0 2.8-.4 4-1',
+    lock: 'M6 10.5h12v9.5H6zM8.5 10.5V8a3.5 3.5 0 017 0v2.5M12 14v2.5',
+    unlock: 'M6 10.5h12v9.5H6zM8.5 10.5V8a3.5 3.5 0 016.8-1.2',
+    copy: 'M8.5 8.5h11v11h-11zM15.5 8.5V4.5h-11v11h4',
+    trash: 'M4 6.5h16M9.5 6.5V4h5v2.5M6.5 6.5l1 13.5h9l1-13.5M10 10.5v6M14 10.5v6',
+    group: 'M4 4h7v7H4zM13 13h7v7h-7zM11 7.5h3.5v5.5',
+    ungroup: 'M4 4h7v7H4zM13 13h7v7h-7z',
+    target: 'M12 3v4M12 17v4M3 12h4M17 12h4M12 8.5a3.5 3.5 0 100 7 3.5 3.5 0 000-7z',
+    reset: 'M4.5 12a7.5 7.5 0 107.5-7.5 7.6 7.6 0 00-6 3M4.5 4v4h4',
     plus: 'M12 5v14M5 12h14',
-    refresh: 'M20 12a8 8 0 01-14.3 5M4 12A8 8 0 0118.3 7M18 3v4h-4M6 21v-4h4',
-    edit: 'M4 20h4L19 9l-4-4L4 16v4z',
-    download: 'M12 4v11m-5-5l5 5 5-5M5 20h14',
-    upload: 'M12 20V9m-5 5l5-5 5 5M5 4h14',
-    play: 'M8 5v14l11-7z',
-    move: 'M12 3v18M3 12h18M12 3l-3 3M12 3l3 3M12 21l-3-3M12 21l3-3M3 12l3-3M3 12l3 3M21 12l-3-3M21 12l-3 3',
+    refresh: 'M19.5 12a7.5 7.5 0 01-13.4 4.6M4.5 12a7.5 7.5 0 0113.4-4.6M18 3.5v4h-4M6 20.5v-4h4',
+    edit: 'M4.5 19.5h4l10-10-4-4-10 10zM13 7l4 4',
+    download: 'M12 4v11M7.5 10.5L12 15l4.5-4.5M5 19.5h14',
+    upload: 'M12 15V4M7.5 8.5L12 4l4.5 4.5M5 19.5h14',
+    play: 'M8 5.5v13l10.5-6.5z',
+    move: 'M12 3v18M3 12h18M12 3L9.5 5.5M12 3l2.5 2.5M12 21l-2.5-2.5M12 21l2.5-2.5M3 12l2.5-2.5M3 12l2.5 2.5M21 12l-2.5-2.5M21 12l-2.5 2.5',
     frame: 'M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5',
-    image: 'M4 5h16v14H4zM4 16l5-5 4 4 3-3 4 4M15.5 9a1.5 1.5 0 100-.1',
-    folder: 'M3 6h6l2 2h10v11H3z',
-    check: 'M5 12l5 5L20 7',
-    x: 'M6 6l12 12M18 6L6 18',
+    image: 'M4 5h16v14H4zM4 15.5l4.5-4.5 3.5 3.5 2.5-2.5 5.5 5.5M15.5 8.6a1.4 1.4 0 100 .1',
+    folder: 'M3.5 6.5h6l2 2h9v10.5h-17z',
+    check: 'M5 12.5l4.5 4.5L19 7.5',
+    x: 'M6.5 6.5l11 11M17.5 6.5l-11 11',
     link: 'M10 14a4 4 0 005.7 0l3-3a4 4 0 00-5.7-5.7l-1 1M14 10a4 4 0 00-5.7 0l-3 3a4 4 0 005.7 5.7l1-1',
-    info: 'M12 3a9 9 0 100 18 9 9 0 000-18zm0 8v5m0-8.5v.1',
-    sun: 'M12 8a4 4 0 100 8 4 4 0 000-8zM12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4',
-    spot: 'M9 3h6l2 6H7zM8 9l-4 12M16 9l4 12M12 9v12',
-    bulb: 'M12 3a6 6 0 016 6c0 3-3 4-3 7H9c0-3-3-4-3-7a6 6 0 016-6zM9 19h6',
-    cube: 'M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3z'
+    info: 'M12 3.5a8.5 8.5 0 100 17 8.5 8.5 0 000-17zM12 11v5M12 7.6v.1',
+    sun: 'M12 8a4 4 0 100 8 4 4 0 000-8zM12 2.5v2M12 19.5v2M4.6 4.6L6 6M18 18l1.4 1.4M2.5 12h2M19.5 12h2M4.6 19.4L6 18M18 6l1.4-1.4',
+    spot: 'M9 3.5h6l1.5 5h-9zM8 8.5L5 20M16 8.5l3 11.5M12 8.5V20',
+    bulb: 'M12 3.5a5.8 5.8 0 015.8 5.8c0 2.6-2.3 3.8-2.6 6.2H8.8c-.3-2.4-2.6-3.6-2.6-6.2A5.8 5.8 0 0112 3.5zM9.5 18.5h5',
+    cube: 'M12 2.8l8 4.4v9.6l-8 4.4-8-4.4V7.2zM4.3 7.4L12 11.8l7.7-4.4M12 11.8v9.2',
+    logo: 'M12 3l2.4 5.6 6.1.5-4.6 4 1.4 6-5.3-3.2-5.3 3.2 1.4-6-4.6-4 6.1-.5z',
+    trace: 'M4 20l3.5-1 10-10-2.5-2.5-10 10zM14 6.5L16.5 4 20 7.5 17.5 10M3.5 13c2-4 5-6 8-6',
+    e3d: 'M12 2.8l8 4.4v9.6l-8 4.4-8-4.4V7.2zM9 10.5h3.2a1.6 1.6 0 010 3.2H9.8h2.6a1.7 1.7 0 010 3.3H9',
+    sparkle: 'M12 3v4M12 17v4M3 12h4M17 12h4M6.5 6.5l2 2M15.5 15.5l2 2M6.5 17.5l2-2M15.5 8.5l2-2'
   };
   function icon(name, size) {
     return '<svg class="ic" viewBox="0 0 24 24" width="' + (size || 16) + '" height="' + (size || 16) + '" aria-hidden="true"><path d="' + (ICON[name] || '') + '"/></svg>';
@@ -428,6 +433,15 @@
     return b;
   }
 
+  // Icon + short label; the label hides only when the panel is very narrow (tooltip keeps it readable).
+  function toolBtn(name, label, tip, onClick) {
+    var b = el('button', 'tool-btn', icon(name, 15) + '<span>' + label + '</span>');
+    b.type = 'button';
+    b.setAttribute('data-tip', tip || label);
+    if (onClick) b.addEventListener('click', function (ev) { ev.stopPropagation(); onClick(ev); });
+    return b;
+  }
+
   function note(text, kind) { return el('p', 'note' + (kind ? ' ' + kind : ''), (kind === 'warn' ? icon('info', 14) : '') + '<span>' + text + '</span>'); }
 
   /* ---------- toast & dialogs ---------- */
@@ -461,7 +475,7 @@
 
   window.UI = {
     icon: icon, el: el, section: section, more: more, row: row, slider: slider, vec: vec, color: color, select: select, seg: seg, toggle: toggle,
-    button: button, iconBtn: iconBtn, note: note, toast: toast, confirm: function (text, danger) { return dialog({ text: text, danger: danger, okKey: danger ? 'btn.yes' : 'btn.ok' }); },
+    button: button, iconBtn: iconBtn, toolBtn: toolBtn, note: note, toast: toast, confirm: function (text, danger) { return dialog({ text: text, danger: danger, okKey: danger ? 'btn.yes' : 'btn.ok' }); },
     prompt: function (text, value) { return dialog({ text: text, input: value || '' }); }, toHex: toHex, fromHex: fromHex, fmt: fmt
   };
 })();

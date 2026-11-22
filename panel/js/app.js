@@ -202,7 +202,7 @@
   var TABS = [['main', 'text'], ['materials', 'materials'], ['scene', 'scene'], ['lighting', 'lighting'], ['animation', 'animation']];
   function buildTabs() {
     var gear = $('#setBtn');
-    gear.innerHTML = icon('settings', 16);
+    gear.innerHTML = icon('settings', 15) + '<span>' + t('tab.settings') + '</span>';
     gear.setAttribute('data-tip', t('tab.settings') + ' · ' + t('tab.presets'));
     gear.classList.toggle('on', S.tab === 'settings');
     gear.onclick = function () { S.tab = S.tab === 'settings' ? 'main' : 'settings'; buildTabs(); showPane(); };
@@ -234,7 +234,7 @@
       value: S.active || '', onChange: function (v) { setActive(v || null); }
     });
     bar.appendChild(s.sel);
-    bar.appendChild(UI.iconBtn('refresh', t('obj.refresh'), function () { S.listHash = ''; poll(true); }));
+    bar.appendChild(UI.toolBtn('refresh', t('obj.refreshS'), t('obj.refresh'), function () { S.listHash = ''; poll(true); }));
   }
 
   /* ---------- viewport ---------- */
@@ -290,11 +290,11 @@
       onChange: function (v) { S.settings.shading = v; saveSettings(); Viewport.setShading(v); if (v === 'hq') Viewport.setQuality('high'); else Viewport.setQuality(S.settings.quality); } });
     bar.appendChild(sh.sel);
     bar.appendChild(el('span', 'sp'));
-    var mv = UI.iconBtn('move', t('vp.move'), function () { mv.classList.toggle('on'); Viewport.setMoveMode(mv.classList.contains('on')); });
+    var mv = UI.toolBtn('move', t('vp.moveS'), t('vp.move'), function () { mv.classList.toggle('on'); Viewport.setMoveMode(mv.classList.contains('on')); });
     bar.appendChild(mv);
-    bar.appendChild(UI.iconBtn('frame', t('vp.fit'), function () { Viewport.fit(); }));
-    bar.appendChild(UI.iconBtn('camera', t('vp.toCam'), function () { applyViewToCamera(false); }));
-    bar.appendChild(UI.iconBtn('image', t('vp.frame'), grabFrame));
+    bar.appendChild(UI.toolBtn('frame', t('vp.fitS'), t('vp.fit'), function () { Viewport.fit(); }));
+    bar.appendChild(UI.toolBtn('camera', t('vp.toCamS'), t('vp.toCam'), function () { applyViewToCamera(false); }));
+    bar.appendChild(UI.toolBtn('image', t('vp.frameS'), t('vp.frame'), grabFrame));
     $('#vpBadge').textContent = t('vp.approx');
   }
 
@@ -347,8 +347,34 @@
   /* ====================== MAIN (text + geometry) ====================== */
   function buildMain(pane) {
     var M = R.main = {};
+    // ---- what to make + which engine, always visible ----
+    var top = el('div', 'start-bar');
+    var hasE3D = !!(S.info && S.info.e3d);
+    M.modeSeg = UI.seg({ key: 'start.engine', value: S.mode, wide: true, options: [
+      { v: 'native', icon: 'cube', label: t('mode.native') },
+      { v: 'e3d', icon: 'e3d', label: t('mode.e3d'), tip: hasE3D ? '' : t('e3d.missing') }],
+      onChange: function (v) {
+        if (v === 'e3d' && !hasE3D) { M.modeSeg.set('native'); UI.toast(t('e3d.missing'), 'warn'); return; }
+        S.mode = v; saveSettings(); updateChips(); refreshActive(); srcVis();
+      } });
+    S.source = S.source || 'text';
+    M.srcSeg = UI.seg({ key: 'start.source', value: S.source, wide: true, options: [
+      { v: 'text', icon: 'text', label: t('src.text') }, { v: 'logo', icon: 'logo', label: t('src.logo') }],
+      onChange: function (v) { S.source = v; srcVis(); } });
+    top.appendChild(M.modeSeg); top.appendChild(M.srcSeg);
+    pane.appendChild(top);
     var sec = UI.section('text', 'sec.text');
     pane.appendChild(sec);
+    var logoSec = UI.section('logo', 'sec.logo');
+    pane.appendChild(logoSec);
+    buildLogo(logoSec.body, M);
+    function srcVis() {
+      sec.style.display = S.source === 'text' ? '' : 'none';
+      logoSec.style.display = S.source === 'logo' ? '' : 'none';
+      if (M.logoRefresh) M.logoRefresh();
+      if (M.gsec) M.gsec.style.display = S.mode === 'e3d' ? 'none' : '';
+    }
+    M.srcVis = srcVis;
     var b = sec.body;
 
     var ta = el('textarea', 'txt');
@@ -518,7 +544,7 @@
     R.e3d = { refresh: function () { renderE3D(e3dSec); }, template: function () { return R.e3d.tpl ? R.e3d.tpl.get() || null : null; } };
 
     // ---- geometry ----
-    var gsec = UI.section('geometry', 'sec.geometry');
+    var gsec = M.gsec = UI.section('geometry', 'sec.geometry');
     pane.appendChild(gsec);
     var G = M.geo = {};
     function gset(values, final) {
@@ -547,7 +573,7 @@
     var gpre = el('div', 'grid');
     gpre.style.marginTop = '10px';
     Presets.geometry.forEach(function (p) {
-      var c = el('button', 'card', icon('cube', 18) + '<span>' + (I18N.lang === 'ar' ? p.ar : p.en) + '</span>');
+      var c = el('button', 'card', Art.geo(p.values) + '<span>' + (I18N.lang === 'ar' ? p.ar : p.en) + '</span>');
       c.type = 'button';
       c.onclick = function () { applyGeometry(p.values); };
       gpre.appendChild(c);
@@ -568,6 +594,7 @@
       G.hole.style.display = canGeo('holeBevel') ? '' : 'none';
       gpre.style.display = ok ? '' : 'none';
       G.faceBox.style.display = ok && it && it.role === 'text' && canSurf('Front', 'opacity') ? '' : 'none';
+      M.srcVis();
       if (R.e3d) R.e3d.refresh();
       if (!isObj(it)) return;
       Host.call('geometry.get', { ref: it.ref }).then(function (g) {
@@ -602,6 +629,107 @@
     if (v.origin === undefined && R.main) v.origin = R.main.geo.origin.get();
     Viewport.patch(it.ref, 'geo', v);
     return run('geometry.set', { refs: refs || selRefs(), values: v }, t('ok.updated')).then(function () { if (R.main) R.main.refresh(); }).catch(function () {});
+  }
+
+  /* ---------- Logo: import, one-click auto trace, link to Element 3D or native extrusion ---------- */
+  function buildLogo(b, M) {
+    var L = { info: null, S: null, polys: null, key: '' };
+    var pick = el('div', 'btns full');
+    pick.appendChild(UI.button('logo.file', { icon: 'upload', onClick: function () {
+      var f = Dialog.open(['png', 'jpg', 'jpeg', 'psd', 'tif', 'tiff', 'webp', 'ai', 'eps', 'pdf', 'svg'], t('logo.file'));
+      if (!f) return;
+      return run('logo.importFile', { file: f }).then(setLogo).catch(function () {});
+    } }));
+    pick.appendChild(UI.button('logo.useSel', { icon: 'target', onClick: function () { return run('logo.selected', {}).then(setLogo).catch(function () {}); } }));
+    b.appendChild(pick);
+    var infoEl = el('div', 'logo-info'); b.appendChild(infoEl);
+    var cv = el('canvas', 'trace-cv'); b.appendChild(cv);
+    var opts = el('div'); b.appendChild(opts);
+    var O = { channel: 'auto', threshold: 0.5, smooth: 1, minArea: 40, corner: 55, invert: false };
+    var chan = UI.seg({ key: 'trace.channel', value: 'auto', wide: true, options: ['auto', 'alpha', 'dark', 'light'].map(function (v) { return { v: v, label: t('ch.' + v) }; }), onChange: function (v) { O.channel = v; L.S = null; retrace(); } });
+    var th = UI.slider({ key: 'trace.threshold', min: 1, max: 99, step: 1, unit: '%', hard: true, value: 50, def: 50, onInput: function (v) { O.threshold = v / 100; retrace(); } });
+    var sm = UI.slider({ key: 'trace.smooth', min: 0, max: 6, step: 0.1, unit: 'px', hard: true, value: 1, def: 1, onInput: function (v) { O.smooth = v; retrace(); } });
+    var mina = UI.slider({ key: 'trace.minArea', min: 0, max: 2000, step: 5, unit: 'px²', floor: 0, value: 40, def: 40, onInput: function (v) { O.minArea = v; retrace(); } });
+    var inv = UI.toggle({ key: 'trace.invert', value: false, onChange: function (v) { O.invert = v; L.S = null; retrace(); } });
+    var corner = UI.slider({ key: 'trace.corner', min: 10, max: 120, step: 1, unit: '°', hard: true, value: 55, def: 55, onInput: function (v) { O.corner = v; retrace(); } });
+    [chan, th, sm, mina].forEach(function (x) { opts.appendChild(x); });
+    opts.appendChild(UI.more('trace').add(inv, corner));
+    var go = el('div', 'btns full');
+    M.logoGo = UI.button('logo.go', { primary: true, icon: 'trace', onClick: doLogo });
+    go.appendChild(M.logoGo);
+    b.appendChild(go);
+
+    function setLogo(inf) {
+      L.info = inf; L.S = null; L.polys = null;
+      M.logoRefresh();
+      if (inf && inf.kind === 'raster') retrace(true);
+    }
+    var rt = 0;
+    function retrace(now) {
+      clearTimeout(rt);
+      rt = setTimeout(function () {
+        if (!L.info || L.info.kind !== 'raster' || !L.info.file) return;
+        var p = L.S ? Promise.resolve(L.S) : Tracer.load(L.info.file).then(function (img) { return (L.S = Tracer.sample(img, O)); });
+        p.then(function (S2) {
+          L.polys = Tracer.run(S2, O);
+          Tracer.draw(cv, S2, L.polys);
+          var holes = L.polys.filter(function (o) { return o.hole; }).length;
+          infoEl.lastChild.textContent = t('trace.count', { n: L.polys.length - holes, h: holes });
+        }).catch(function () { App.error({ code: 'TRACE_LOAD' }); });
+      }, now ? 0 : 120);
+    }
+    M.logoRefresh = function () {
+      var inf = L.info;
+      infoEl.innerHTML = '';
+      var e3d = S.mode === 'e3d';
+      M.logoGo.querySelector('span').textContent = t(inf && inf.kind !== 'raster' ? (e3d ? 'logo.goVecE3D' : 'logo.goVec') : (e3d ? 'logo.goE3D' : 'logo.go'));
+      if (!inf) { infoEl.appendChild(UI.note(t('logo.hint'))); cv.style.display = 'none'; opts.style.display = 'none'; return; }
+      var line = el('div', 'logo-line', icon(inf.kind === 'raster' ? 'image' : 'logo', 14) + '<b></b><span class="tag"></span>');
+      line.querySelector('b').textContent = inf.name;
+      line.querySelector('.tag').textContent = t('kind.' + inf.kind);
+      infoEl.appendChild(line);
+      infoEl.appendChild(el('div', 'note'));
+      var raster = inf.kind === 'raster';
+      cv.style.display = raster ? '' : 'none';
+      opts.style.display = raster ? '' : 'none';
+      if (!raster) infoEl.lastChild.textContent = t('logo.vecHint');
+    };
+
+    function doLogo() {
+      if (!L.info) { UI.toast(t('logo.hint'), 'warn'); return; }
+      var e3d = S.mode === 'e3d' && S.info && S.info.e3d;
+      var as = e3d ? 'masks' : 'shape';
+      var contoursP;
+      if (L.info.kind === 'raster') {
+        if (!L.polys || !L.polys.length) { UI.toast(t('err.TRACE_EMPTY'), 'warn'); return; }
+        contoursP = Host.call('logo.rasterPlacement', { ref: L.info.ref }).then(function (place) { return Tracer.toComp(L.polys, L.S, place); });
+      } else {
+        contoursP = Host.call('logo.vectorContours', { ref: L.info.ref }).then(function (r) { return markHoles(r.contours); });
+      }
+      busy(true);
+      return contoursP.then(function (contours) {
+        return Host.call('logo.build', { as: as, contours: contours, name: L.info.name.replace(/^Logo - /, '') + ' 3D', hideRef: L.info.ref, color: S.draft.fill });
+      }).then(function (built) {
+        if (e3d) return Host.call('e3d.create', { textRef: built.ref, templateRef: R.e3d && R.e3d.template ? R.e3d.template() : null });
+        var jobs = [];
+        if (canGeo('depth')) jobs.push(Host.call('geometry.set', { ref: built.ref, values: Object.assign({ origin: 'center' }, Presets.geometry[3].values) }));
+        if (!S.items.some(function (i) { return i.role === 'light'; })) jobs.push(Host.call('lights.applyPreset', { lights: Presets.lighting[0].lights, replace: false }));
+        return Promise.all(jobs).then(function () { return built; });
+      }).then(function (r) {
+        busy(false);
+        UI.toast(t(e3d ? 'logo.doneE3D' : 'logo.done'));
+        S.active = r.ref; S.sel = [r.ref]; S.listHash = ''; poll(true); refreshActive();
+      }).catch(function (e) { busy(false); App.error(e); });
+    }
+    // vector outlines: decide holes by even-odd nesting (vertex polygons are precise enough for nesting)
+    function markHoles(cs) {
+      function area(p) { var s2 = 0, i, j; for (i = 0, j = p.length - 1; i < p.length; j = i++) s2 += (p[j][0] - p[i][0]) * (p[j][1] + p[i][1]); return Math.abs(s2 / 2); }
+      function inside(q, poly) { var c = false, i, j; for (i = 0, j = poly.length - 1; i < poly.length; j = i++) { if (((poly[i][1] > q[1]) !== (poly[j][1] > q[1])) && (q[0] < (poly[j][0] - poly[i][0]) * (q[1] - poly[i][1]) / (poly[j][1] - poly[i][1]) + poly[i][0])) c = !c; } return c; }
+      var list = cs.map(function (c) { return { c: c, a: area(c.v) }; }).sort(function (a, b) { return b.a - a.a; });
+      list.forEach(function (o, i) { o.d = 0; for (var k = i - 1; k >= 0; k--) if (inside(o.c.v[0], list[k].c.v)) { o.d = list[k].d + 1; break; } o.c.hole = o.d % 2 === 1; });
+      return list.map(function (o) { return o.c; });
+    }
+    M.logoRefresh();
   }
 
   /* ---------- Element 3D (Mode A) ---------- */
@@ -1061,7 +1189,7 @@
     var replace = UI.toggle({ key: 'light.replace', value: true });
     var grid = el('div', 'grid');
     Presets.lighting.concat(userPresets('lighting')).forEach(function (p) {
-      var c = el('button', 'card', icon('bulb', 18) + '<span></span>'); c.type = 'button';
+      var c = el('button', 'card', Art.lights(p.lights || (p.data && p.data.lights) || []) + '<span></span>'); c.type = 'button';
       c.lastChild.textContent = p.name || t(p.key);
       c.onclick = function () {
         if (!S.comp) { UI.toast(t('err.NO_COMP'), 'warn'); return; }
@@ -1220,7 +1348,7 @@
 
     var grid = el('div', 'grid');
     Presets.camera.concat(userPresets('camera')).forEach(function (p) {
-      var c = el('button', 'card', icon('camera', 18) + '<span></span>'); c.type = 'button';
+      var c = el('button', 'card', Art.camera(p.data || p) + '<span></span>'); c.type = 'button';
       c.lastChild.textContent = p.name || t(p.key);
       c.onclick = function () { applyFraming(p.data || p); };
       grid.appendChild(c);
@@ -1296,12 +1424,12 @@
     var grid = el('div', 'grid');
     var apIcon = { reveal3d: 'cube', entrance: 'move', popUp: 'plus', scaleReveal: 'frame', spin3d: 'refresh', smoothRotation: 'reset', floating: 'environment', cinematic: 'camera', extrudeGrow: 'scene', bevelGrow: 'target', colorShift: 'materials' };
     Presets.animation.forEach(function (id) {
-      var c = el('button', 'card', icon(apIcon[id] || 'play', 18) + '<span>' + t('ap.' + id) + '</span>'); c.type = 'button';
+      var c = el('button', 'card', Art.anim(id) + '<span>' + t('ap.' + id) + '</span>'); c.type = 'button';
       c.onclick = function () { applyAnimPreset(id, readTiming()); };
       grid.appendChild(c);
     });
     userPresets('animation').forEach(function (p) {
-      var c = el('button', 'card', icon('play', 18) + '<span></span>'); c.type = 'button';
+      var c = el('button', 'card', Art.anim(p.data.preset) + '<span></span>'); c.type = 'button';
       c.lastChild.textContent = p.name;
       c.onclick = function () { applyAnimPreset(p.data.preset, Object.assign(readTiming(), p.data)); };
       grid.appendChild(c);
